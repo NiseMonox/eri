@@ -139,6 +139,7 @@ async def run_report(payload: dict) -> None:
                     for r in weights.recent_days(days))
         + "\n\n用日语写 2-3 句周报点评(友达口吻,だよ/ね系):先说趋势,再给一句轻量建议。不要说教,不要列表,只输出日语正文。",
         timeout=120,
+        purpose="report",
     )
     if narrative:
         text = narrative.strip() + "\n\n" + text

@@ -4,8 +4,10 @@
 from .. import events, store
 
 
-async def complete(prompt: str, system: str = "", timeout: int = 45) -> str | None:
-    """返回文本;provider=off、未配置或出错时返回 None(调用方必须有无 LLM 的降级路径)。"""
+async def complete(prompt: str, system: str = "", timeout: int = 45,
+                   purpose: str = "parse") -> str | None:
+    """返回文本;provider=off、未配置或出错时返回 None(调用方必须有无 LLM 的降级路径)。
+    purpose ∈ parse(默认,解析/对话决策)| report(周报文案),各自可在 settings 配不同模型。"""
     provider = store.get("llm.provider", "claude")
     if provider == "off":
         return None
@@ -17,7 +19,7 @@ async def complete(prompt: str, system: str = "", timeout: int = 45) -> str | No
         else:
             from . import claude_cli
 
-            text = await claude_cli.complete(prompt, system, timeout=timeout)
+            text = await claude_cli.complete(prompt, system, timeout=timeout, purpose=purpose)
         events.log("llm_call", {"provider": provider, "prompt_head": prompt[:80],
                                 "ok": text is not None})
         return text

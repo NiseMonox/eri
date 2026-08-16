@@ -1,24 +1,45 @@
-"""claude -p(headless,计入 Claude 订阅额度)。串行信号量:个人场景不需要并发 LLM。"""
+"""claude -p(headless,计入 Claude 订阅额度)。
+精简模式:禁全部工具、自带系统提示词替换 Claude Code 默认的 ~27k token 提示词、
+不加载 MCP、不落盘会话(注:--bare 会跳过凭据读取导致未登录,不能用)——每次调用只剩我们自己的 prompt。串行信号量。"""
 
 import asyncio
 import json
 
+from .. import store
+
 _sem = asyncio.Semaphore(1)
 DEFAULT_TIMEOUT = 45   # 交互式解析等不起 2 分钟;周报这类后台任务由调用方放宽
 
+FALLBACK_SYSTEM = "You are a concise assistant. Follow the user's formatting instructions exactly."
 
-async def complete(prompt: str, system: str = "", timeout: int = DEFAULT_TIMEOUT) -> str | None:
-    full = (system + "\n\n" + prompt) if system else prompt
+
+def model_for(purpose: str) -> str:
+    """purpose ∈ parse|report。settings: llm.claude_model_parse / llm.claude_model_report(默认都 sonnet)。"""
+    key = "llm.claude_model_report" if purpose == "report" else "llm.claude_model_parse"
+    return str(store.get(key, "sonnet") or "sonnet")
+
+
+async def complete(prompt: str, system: str = "", timeout: int = DEFAULT_TIMEOUT,
+                   purpose: str = "parse") -> str | None:
+    args = [
+        "claude", "-p",
+        "--output-format", "json",
+        "--model", model_for(purpose),
+        "--tools", "",                       # 艾莉不需要任何 Claude Code 工具
+        "--system-prompt", system or FALLBACK_SYSTEM,
+        "--no-session-persistence",
+        "--strict-mcp-config",               # 不加载任何 MCP
+    ]
     async with _sem:
         proc = await asyncio.create_subprocess_exec(
-            "claude", "-p", "--output-format", "json",
+            *args,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd="/tmp",   # 空目录:避免加载任何项目上下文,纯文本补全
+            cwd="/tmp",   # 空目录:避免加载任何项目上下文
         )
         try:
-            out, err = await asyncio.wait_for(proc.communicate(full.encode()), timeout=timeout)
+            out, err = await asyncio.wait_for(proc.communicate(prompt.encode()), timeout=timeout)
         except asyncio.TimeoutError:
             proc.kill()
             await proc.wait()

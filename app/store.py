@@ -12,6 +12,8 @@ EDITABLE_KEYS = {
     "audio.alsa_device": "",          # 如 alsa/plughw:CARD=Device;空=系统默认
     "audio.cast_ip": "",
     "llm.provider": "claude",         # claude|deepseek|off
+    "llm.claude_model_parse": "sonnet",    # 对话决策/解析/翻译:sonnet 够用且快(可填 opus/fable 或完整 model id)
+    "llm.claude_model_report": "sonnet",   # 周报文案:想要更好文笔可改 opus
     "report.enabled": True,
     "withings.poll_minutes": 15,
     "tts.enabled": True,
