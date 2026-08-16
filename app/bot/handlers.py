@@ -5,7 +5,7 @@ from telegram.ext import ContextTypes
 
 from .. import charts, clock
 from ..config import settings
-from ..services import intents, meds
+from ..services import intents, routines
 
 HELP = (
     "そのままメッセージ送ってね:\n"
@@ -14,7 +14,7 @@ HELP = (
     "「薬飲んだ」→ 服薬確認\n"
     "「今日」→ 今日の予定 /「グラフ」→ 体重グラフ /「週報」→ 週報作成\n"
     "「明日の朝9時にゴミ出し」→ リマインダー作成\n"
-    "コマンド:/today /chart /report /med /help"
+    "コマンド:/today /chart /report /routine /help"
 )
 
 
@@ -56,24 +56,25 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await intents.execute({"intent": "report"}, via="telegram")
 
 
-async def cmd_med(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def cmd_routine(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _authorized(update) or not update.effective_message:
         return
-    pending = meds.list_logs(status="pending", limit=5)
-    if not pending:
-        await update.effective_message.reply_text("いま確認待ちのお薬はないよ 👍")
+    opens = [i for i in routines.today_instances() if i["status"] in ("pending", "notified", "missed")]
+    if not opens:
+        await update.effective_message.reply_text("いま確認待ちのルーティンはないよ 👍")
         return
-    for log in pending:
+    for inst in opens[:5]:
         await update.effective_message.reply_text(
-            f"💊 {log['med_name']} {log['med_dose'] or ''}(服用予定 {clock.fmt_local(log['due_at'])})",
-            reply_markup=_med_buttons(log["id"]),
+            f"{inst['icon']} {inst['routine_name']}(予定 {clock.fmt_local(inst['due_at'])})",
+            reply_markup=_routine_buttons(inst["id"], inst["category"]),
         )
 
 
-def _med_buttons(log_id: int) -> InlineKeyboardMarkup:
+def _routine_buttons(inst_id: int, category: str = "other") -> InlineKeyboardMarkup:
+    done_label = "✅ 飲んだよ" if category == "med" else "✅ やったよ"
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ 飲んだよ", callback_data=f"medconfirm:{log_id}"),
-        InlineKeyboardButton("今回はスキップ", callback_data=f"medskip:{log_id}"),
+        InlineKeyboardButton(done_label, callback_data=f"rdone:{inst_id}"),
+        InlineKeyboardButton("今回はスキップ", callback_data=f"rskip:{inst_id}"),
     ]])
 
 
@@ -87,18 +88,18 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not _authorized(update):
         return
     action, _, sid = q.data.partition(":")
-    log = None
-    if action == "medconfirm":
-        log = meds.confirm(log_id=int(sid), via="telegram")
-    elif action == "medskip":
-        log = meds.skip(int(sid), via="telegram")
-    if log is None:
+    row = None
+    if action in ("rdone", "medconfirm"):
+        row = routines.complete(int(sid), via="telegram")
+    elif action in ("rskip", "medskip"):
+        row = routines.skip(int(sid), via="telegram")
+    if row is None:
         await q.edit_message_text("その記録は見つからなかったよ(削除されたかも)")
         return
-    t = clock.fmt_local(log["confirmed_at"], "%H:%M")
-    label = {"confirmed": f"✅ 確認したよ {t}", "skipped": f"⏭ スキップしたよ {t}",
-             "missed": "⚠️ 飲み忘れ扱いだよ。画面から後追い確認してね"}.get(log["status"], log["status"])
-    await q.edit_message_text(f"💊 {log.get('med_name') or ''} {label}".strip())
+    t = clock.fmt_local(row.get("done_at"), "%H:%M")
+    label = {"done": f"✅ 完了 {t}", "dismissed": f"⏭ スキップ {t}",
+             "missed": "⚠️ 期限切れ扱いだよ。やったら「やった」って言ってね"}.get(row["status"], row["status"])
+    await q.edit_message_text(f"{row['title']} {label}".strip())
 
 
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

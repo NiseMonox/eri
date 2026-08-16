@@ -4,7 +4,7 @@ import pytest
 
 from app import clock
 from app.audio import tts
-from app.services import intents, meds
+from app.services import intents, routines
 
 
 def _at_jst(h, m=0):
@@ -75,15 +75,25 @@ async def test_intents_weight_and_med(fresh_db):
                                via="siri")
     assert r2["ok"] is False
 
-    # 无 pending 时的确认
-    r3 = await intents.execute({"intent": "med_confirm"}, via="siri")
-    assert "確認待ち" in r3["reply"]
-    # 有 pending
-    med = meds.create_med("测试药")
-    meds.create_due_log(med["id"])
-    r4 = await intents.execute({"intent": "med_confirm"}, via="siri")
-    assert r4["ok"] and "服薬確認" in r4["reply"]
-    assert meds.list_logs(status="confirmed")[0]["confirm_via"] == "siri"
+
+
+async def test_routine_done_via_conversation(fresh_db, monkeypatch):
+    """「薬飲んだ」正则快路径 → 最近的 med 类 routine 实例 done。"""
+    from app.services import conversation
+    from app.audio import tts as _tts
+
+    async def no_tts(*a, **k):
+        return False
+
+    monkeypatch.setattr(_tts, "announce_done", no_tts)
+    r3 = await conversation.handle("薬飲んだ", via="siri")
+    assert "確認待ち" in r3["reply"]        # 还没有实例
+    rt = routines.create("测试药", "med")
+    inst = routines.create_instance(rt, None, force=True)
+    r4 = await conversation.handle("薬飲んだ", via="siri")
+    assert r4["ok"] and "完了" in r4["reply"]
+    assert routines.instances(status="done")[0]["done_via"] == "siri"
+    assert routines.instances(status="done")[0]["id"] == inst["id"]
 
 
 async def test_intents_bad_llm_fields(fresh_db):

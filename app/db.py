@@ -5,7 +5,7 @@ from .config import settings
 
 _conn: sqlite3.Connection | None = None
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # 增量迁移:key=目标版本。schema.sql 永远是 v1 基线,新库=基线+全部迁移,老库=按版本补。
 # 每个版本在单一事务内执行并连带写版本号:中途失败整体回滚,不会出现「列已加、版本没动」的启动死循环
@@ -39,6 +39,69 @@ CREATE TABLE body_metrics (
   UNIQUE (measured_at, metric, source)
 );
 CREATE INDEX idx_bodymetrics_metric_at ON body_metrics(metric, measured_at);
+""",
+    # v5:meds → 通用 routines;med_logs → reminders 实例(kind=routine);长期记忆表
+    5: """
+CREATE TABLE routines (
+  id         INTEGER PRIMARY KEY,
+  name       TEXT NOT NULL,
+  category   TEXT NOT NULL DEFAULT 'other',   -- med|exercise|care|habit|other
+  detail     TEXT,
+  icon       TEXT,
+  nag        TEXT,                              -- 追催参数 JSON(空=全局默认)
+  active     INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL
+);
+ALTER TABLE reminders ADD COLUMN kind TEXT NOT NULL DEFAULT 'reminder';
+ALTER TABLE reminders ADD COLUMN routine_id INTEGER;
+ALTER TABLE reminders ADD COLUMN token TEXT;
+ALTER TABLE reminders ADD COLUMN done_via TEXT;
+CREATE INDEX idx_reminders_routine ON reminders(routine_id, due_at);
+CREATE UNIQUE INDEX idx_reminders_token ON reminders(token) WHERE token IS NOT NULL;
+INSERT INTO routines (id, name, category, detail, active, created_at)
+  SELECT id, name, 'med',
+         TRIM(COALESCE(dose,'') || CASE WHEN notes IS NOT NULL AND notes<>'' THEN ' / '||notes ELSE '' END),
+         active, created_at FROM meds;
+INSERT INTO reminders (title, body, due_at, status, done_at, created_at, schedule_id,
+                       remind_count, nag, notified_at, kind, routine_id, token, done_via)
+  SELECT m.name, '', l.due_at,
+         CASE l.status WHEN 'confirmed' THEN 'done' WHEN 'skipped' THEN 'dismissed' ELSE l.status END,
+         l.confirmed_at, l.created_at, l.schedule_id, l.remind_count,
+         REPLACE(REPLACE(COALESCE(l.params,''), 'resend_every_min', 'every_min'), 'max_resends', 'max'),
+         l.due_at, 'routine', l.med_id, l.token, l.confirm_via
+  FROM med_logs l JOIN meds m ON m.id = l.med_id;
+CREATE TABLE schedules_v5 (
+  id          INTEGER PRIMARY KEY,
+  name        TEXT NOT NULL,
+  type        TEXT NOT NULL CHECK (type IN ('audio','routine','med','weight_prompt','reminder','report')),
+  cron        TEXT NOT NULL,
+  payload     TEXT NOT NULL DEFAULT '{}',
+  enabled     INTEGER NOT NULL DEFAULT 1,
+  last_run_at TEXT,
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+);
+INSERT INTO schedules_v5 SELECT id, name,
+  CASE type WHEN 'med' THEN 'routine' ELSE type END,
+  cron, REPLACE(payload, '"med_id"', '"routine_id"'), enabled, last_run_at, created_at, updated_at
+  FROM schedules;
+DROP TABLE schedules;
+ALTER TABLE schedules_v5 RENAME TO schedules;
+ALTER TABLE meds RENAME TO _legacy_meds;
+ALTER TABLE med_logs RENAME TO _legacy_med_logs;
+CREATE TABLE memories (
+  id           INTEGER PRIMARY KEY,
+  kind         TEXT NOT NULL,        -- schedule|preference|fact|mood
+  text         TEXT NOT NULL,
+  valid_from   TEXT,
+  valid_until  TEXT,                 -- 空=长期有效
+  source       TEXT NOT NULL DEFAULT 'assistant',
+  active       INTEGER NOT NULL DEFAULT 1,
+  created_at   TEXT NOT NULL,
+  updated_at   TEXT NOT NULL,
+  last_seen_at TEXT
+);
+CREATE INDEX idx_memories_active ON memories(active, kind);
 """,
 }
 

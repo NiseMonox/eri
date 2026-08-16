@@ -35,7 +35,7 @@
     <div class="formrow">
       <input name="name" placeholder="名前" required>
       <select name="type" id="ntype" onchange="fillExample()">
-        <option value="med">med お薬</option>
+        <option value="routine">routine ルーティン(お薬・運動…)</option>
         <option value="weight_prompt">weight_prompt 体重記録</option>
         <option value="reminder">reminder リマインダー</option>
         <option value="audio">audio オーディオ</option>
@@ -48,8 +48,8 @@
     <div class="formrow"><button class="primary">作成</button></div>
   </form>
   <p class="muted">payload の例 —
-    med: <code>{"med_id":1,"resend_every_min":30,"max_resends":3,"grace_min":180}</code>
-    {% if meds %}(お薬:{% for m in meds %}{{ m.id }}={{ m.name }} {% endfor %}){% endif %}<br>
+    routine: <code>{"routine_id":1,"nag":{"every_min":30,"max":3,"grace_min":120}}</code>
+    {% if routines %}(ルーティン:{% for r in routines %}{{ r.id }}={{ r.icon }}{{ r.name }} {% endfor %}){% endif %}<br>
     audio ホワイトノイズ: <code>{"action":"white_noise","preset":"brown","volume":40,"duration_min":60}</code><br>
     audio アラーム: <code>{"action":"alarm","fade_in_sec":120,"target_volume":80,"max_min":30}</code><br>
     report: <code>{"days":7}</code>
@@ -58,7 +58,7 @@
 
 <script>
 const EXAMPLES = {
-  med: '{"med_id":1}',
+  routine: '{"routine_id":1}',
   weight_prompt: '{"text":"体重を測ろう!"}',
   reminder: '{"title":"ゴミ出し","body":"可燃ゴミ"}',
   audio: '{"action":"white_noise","preset":"brown","volume":40,"duration_min":60}',

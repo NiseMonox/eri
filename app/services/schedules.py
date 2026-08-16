@@ -2,7 +2,7 @@ import json
 
 from .. import clock, db
 
-TYPES = ("audio", "med", "weight_prompt", "reminder", "report")
+TYPES = ("audio", "routine", "med", "weight_prompt", "reminder", "report")
 
 
 def _validate(type_: str, cron: str, payload: dict) -> None:
@@ -13,8 +13,8 @@ def _validate(type_: str, cron: str, payload: dict) -> None:
     core.validate_cron(cron)
     if not isinstance(payload, dict):
         raise ValueError("payload must be a JSON object")
-    if type_ == "med" and not payload.get("med_id"):
-        raise ValueError("med schedule 需要 payload.med_id")
+    if type_ in ("routine", "med") and not (payload.get("routine_id") or payload.get("med_id")):
+        raise ValueError("routine schedule 需要 payload.routine_id")
 
 
 def _row(r) -> dict:

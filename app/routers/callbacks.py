@@ -5,7 +5,7 @@ from fastapi.responses import HTMLResponse
 
 from .. import clock
 from ..audio.manager import audio_manager
-from ..services import meds
+from ..services import routines
 
 router = APIRouter()
 
@@ -27,18 +27,19 @@ def _page(icon: str, title: str, sub: str = "") -> HTMLResponse:
     return HTMLResponse(_PAGE.format(icon=icon, title=title, sub=sub))
 
 
-@router.get("/c/med/{token}")
-async def confirm_med(token: str):
-    log = meds.get_log_by_token(token)
-    if log is None:
+@router.get("/c/r/{token}")
+@router.get("/c/med/{token}")   # 旧路径别名
+async def confirm_routine(token: str):
+    inst = routines.get_instance_by_token(token)
+    if inst is None:
         return _page("❓", "無効なリンクだよ")
-    if log["status"] == "pending":
-        log = meds.confirm(token=token, via="bark")
-        t = clock.fmt_local(log["confirmed_at"], "%H:%M")
-        return _page("✅", f"服薬確認したよ {t}")
-    if log["status"] == "confirmed":
-        return _page("✅", f"確認済みだよ({clock.fmt_local(log['confirmed_at'], '%H:%M')})")
-    return _page("ℹ️", f"この記録の状態:{log['status']}", "後追い確認は画面からどうぞ")
+    if inst["status"] in ("pending", "notified", "missed"):
+        row = routines.complete(inst["id"], via="bark")
+        t = clock.fmt_local(row["done_at"], "%H:%M")
+        return _page("✅", f"{row['title']}、完了にしたよ {t}")
+    if inst["status"] == "done":
+        return _page("✅", f"もう完了済みだよ({clock.fmt_local(inst['done_at'], '%H:%M')})")
+    return _page("ℹ️", f"この記録の状態:{inst['status']}", "変更は画面からどうぞ")
 
 
 @router.get("/s/stop")

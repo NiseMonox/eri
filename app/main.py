@@ -15,9 +15,10 @@ from .routers import (
     audio,
     callbacks,
     ingest,
-    meds,
+    memories,
     pages,
     reminders,
+    routines,
     schedules,
     system,
     weights,
@@ -71,7 +72,9 @@ app = FastAPI(title="Eri", lifespan=lifespan)
 app.include_router(system.router)
 app.include_router(schedules.router)
 app.include_router(weights.router)
-app.include_router(meds.router)
+app.include_router(routines.router)
+app.include_router(routines.legacy)
+app.include_router(memories.router)
 app.include_router(reminders.router)
 app.include_router(audio.router)
 app.include_router(ingest.router)

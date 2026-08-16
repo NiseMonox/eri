@@ -1,8 +1,7 @@
-"""意图执行层:parser 产出的 intent dict → 实际动作 + 回复文本。
-Telegram bot 与 Siri(POST /api/ingest/text)共用,保证两个入口行为一致。"""
+"""标准意图执行层(体重/新建提醒/今日/图表/周报)。routine 确认与对话动作在 conversation 里。"""
 
 from .. import clock
-from . import meds, reminders, weights
+from . import reminders, weights
 
 
 async def execute(intent: dict, *, via: str) -> dict:
@@ -25,16 +24,6 @@ async def execute(intent: dict, *, via: str) -> dict:
         st = weights.stats(7)
         extra = f"、直近7日で {st['delta']:+.2f}kg" if st and st["count"] > 1 else ""
         return {"ok": True, "reply": f"⚖️ {r['row']['weight_kg']}kg 記録したよ({t}){extra}",
-                "photo": None}
-
-    if kind == "med_confirm":
-        pending = meds.list_logs(status="pending", limit=1)
-        if not pending:
-            return {"ok": True, "reply": "いま確認待ちのお薬はないよ 👍", "photo": None}
-        log = meds.confirm(log_id=pending[0]["id"], via=via)
-        return {"ok": True,
-                "reply": f"✅ 服薬確認したよ:{pending[0]['med_name']}"
-                         f"({clock.fmt_local(log['confirmed_at'], '%H:%M')})",
                 "photo": None}
 
     if kind == "reminder":
@@ -70,7 +59,7 @@ def today_text() -> str:
     agenda = reminders.today_agenda()
     if not agenda:
         return "今日の予定はないよ"
-    icon = {"med": "💊", "weight_prompt": "⚖️", "reminder": "🔔"}
+    icon = {"routine": "✅", "med": "💊", "weight_prompt": "⚖️", "reminder": "🔔"}
     return "今日の予定:\n" + "\n".join(
-        f"{a['time']} {icon.get(a['kind'], '•')} {a['title']}" for a in agenda
+        f"{a['time']} {a.get('icon') or icon.get(a['kind'], '•')} {a['title']}" for a in agenda
     )

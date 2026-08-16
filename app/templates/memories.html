@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}メモリー - Eri{% endblock %}
+{% block content %}
+<h1>メモリー</h1>
+<p class="muted">エリが覚えていること。会話から自動で増減するよ(予定は終わったら自動で消える)。間違ってたらここで直してね。</p>
+
+<div class="card">
+  <form method="post" action="/memories/create">
+    <div class="formrow">
+      <select name="kind">{% for k, v in kinds.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select>
+      <input name="text" placeholder="覚えてほしいこと(例: 毎週水曜はジムに行く)" required style="flex:1;min-width:240px">
+      <input name="valid_until" type="datetime-local" title="期限(予定なら必須)">
+      <button class="primary">覚えて</button>
+    </div>
+  </form>
+</div>
+
+{% for k, label in kinds.items() %}
+{% set group = rows | selectattr("kind", "equalto", k) | list %}
+{% if group %}
+<div class="card">
+  <h2 style="margin-top:0">{{ label }}</h2>
+  <table>
+    {% for m in group %}
+    <tr>
+      <td style="width:60%">
+        <form method="post" action="/memories/{{ m.id }}/update" class="formrow" style="margin:0">
+          <input name="text" value="{{ m.text }}" style="flex:1">
+          <input name="valid_until" type="datetime-local" style="width:190px"
+                 value="{% if m.valid_until %}{{ m.valid_until | fmt_local('%Y-%m-%dT%H:%M') }}{% endif %}">
+          <button class="small">更新</button>
+        </form>
+      </td>
+      <td class="muted">{% if m.valid_until %}〜{{ m.valid_until | fmt_local("%m/%d %H:%M") }}{% else %}無期限{% endif %}</td>
+      <td class="muted">{{ m.source }}</td>
+      <td><form class="inline" method="post" action="/memories/{{ m.id }}/delete"><button class="small">忘れる</button></form></td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+{% endfor %}
+{% if not rows %}<p class="muted">まだ何も覚えてないよ。話しかけてみて。</p>{% endif %}
+{% endblock %}

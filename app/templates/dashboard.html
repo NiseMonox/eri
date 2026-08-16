@@ -2,38 +2,37 @@
 {% block content %}
 <h1>今日</h1>
 
-{% if missed %}
+{% if routine_missed %}
 <div class="card alert">
-  <strong>⚠️ 飲み忘れ</strong>
+  <strong>⚠️ 未実施のルーティン</strong>
   <table>
-    {% for l in missed %}
-    <tr><td>{{ l.due_at | fmt_local }}</td><td>{{ l.med_name }}</td>
-      <td><form class="inline" method="post" action="/meds/logs/{{ l.id }}/confirm"><button class="small">後追い確認</button></form></td></tr>
+    {% for i in routine_missed %}
+    <tr><td>{{ i.due_at | fmt_local }}</td><td>{{ i.icon }} {{ i.routine_name }}</td>
+      <td><form class="inline" method="post" action="/routines/instances/{{ i.id }}/done"><button class="small">やった(後追い)</button></form></td></tr>
     {% endfor %}
   </table>
 </div>
 {% endif %}
 
-{% if pending %}
+{% if routine_open %}
 <div class="card">
-  <strong>確認待ちのお薬</strong>
+  <strong>確認待ちのルーティン</strong>
   <table>
-    {% for l in pending %}
-    <tr><td>{{ l.due_at | fmt_local }}</td><td>{{ l.med_name }} {{ l.med_dose or "" }}</td>
-      <td><form class="inline" method="post" action="/meds/logs/{{ l.id }}/confirm"><button class="small primary">✅ 飲んだ</button></form>
-          <form class="inline" method="post" action="/meds/logs/{{ l.id }}/skip"><button class="small">スキップ</button></form></td></tr>
+    {% for i in routine_open %}
+    <tr><td>{{ i.due_at | fmt_local }}</td><td>{{ i.icon }} {{ i.routine_name }}</td>
+      <td><form class="inline" method="post" action="/routines/instances/{{ i.id }}/done"><button class="small primary">✅ やった</button></form>
+          <form class="inline" method="post" action="/routines/instances/{{ i.id }}/skip"><button class="small">スキップ</button></form></td></tr>
     {% endfor %}
   </table>
 </div>
 {% endif %}
 
-{% if done_today %}
+{% if done_today or routine_done %}
 <div class="card">
   <strong>今日の完了 ✅</strong>
   <table>
-    {% for d in done_today %}
-    <tr><td>{{ d.done_at | fmt_local("%H:%M") }}</td><td>{{ d.title }}</td></tr>
-    {% endfor %}
+    {% for i in routine_done %}<tr><td>{{ i.done_at | fmt_local("%H:%M") }}</td><td>{{ i.icon }} {{ i.routine_name }}</td></tr>{% endfor %}
+    {% for d in done_today if d.kind != "routine" %}<tr><td>{{ d.done_at | fmt_local("%H:%M") }}</td><td>🔔 {{ d.title }}</td></tr>{% endfor %}
   </table>
 </div>
 {% endif %}
@@ -44,7 +43,7 @@
     {% if agenda %}
     <table>
       {% for a in agenda %}
-      <tr><td>{{ a.time }}</td><td>{{ {"med":"💊","weight_prompt":"⚖️","reminder":"🔔"}.get(a.kind, "•") }} {{ a.title }}</td></tr>
+      <tr><td>{{ a.time }}</td><td>{{ a.icon or {"routine":"✅","med":"💊","weight_prompt":"⚖️","reminder":"🔔"}.get(a.kind, "•") }} {{ a.title }}</td></tr>
       {% endfor %}
     </table>
     {% else %}<p class="muted">予定なし(「スケジュール」で作成してね)</p>{% endif %}

@@ -7,7 +7,6 @@ from . import clock, db
 
 # 网页 /settings 允许编辑的 key 白名单(值均为 JSON)
 EDITABLE_KEYS = {
-    "med.defaults": {"resend_every_min": 30, "max_resends": 3, "grace_min": 180},
     "audio.backend": "mpv",
     "audio.alsa_device": "",          # 如 alsa/plughw:CARD=Device;空=系统默认
     "audio.cast_ip": "",
@@ -22,7 +21,10 @@ EDITABLE_KEYS = {
     "tts.speaker": 3,                 # 3=ずんだもん ノーマル,GET /speakers 枚举
     "tts.volume": 80,
     "tts.speak_replies": True,        # 对话确认(推迟/完成)也用音箱念出来
-    "reminder.nag_defaults": {"every_min": 30, "max": 3, "grace_min": 120},   # 提醒无回应追催
+    "reminder.nag_defaults": {"every_min": 30, "max": 3, "grace_min": 120},   # 提醒/routine 无回应追催
+    "chat.context_hours": 72,          # 短期对话窗口(小时)
+    "chat.context_budget_tokens": 1500,  # 短期对话注入上限(粗估 token)
+    "memory.enabled": True,            # 长期记忆自动维护开关
 }
 
 

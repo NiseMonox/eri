@@ -4,28 +4,28 @@ import pytest
 
 from app import clock
 from app.scheduler import core
-from app.services import meds, reminders
+from app.services import reminders, routines
 from app.services import schedules as sched_svc
 
 
 def test_crud_and_validation(fresh_db):
-    med = meds.create_med("X")
-    row = sched_svc.create("早药", "med", "0 8 * * *", {"med_id": med["id"]})
+    rt = routines.create("早药", "med")
+    row = sched_svc.create("早药", "routine", "0 8 * * *", {"routine_id": rt["id"]})
     assert row["enabled"] == 1
     with pytest.raises(ValueError):
         sched_svc.create("坏cron", "reminder", "99 99 * * *", {})
     with pytest.raises(ValueError):
         sched_svc.create("坏类型", "nope", "0 8 * * *", {})
     with pytest.raises(ValueError):
-        sched_svc.create("med缺id", "med", "0 8 * * *", {})
+        sched_svc.create("routine缺id", "routine", "0 8 * * *", {})
     assert sched_svc.toggle(row["id"])["enabled"] == 0
     assert sched_svc.delete(row["id"]) is True
 
 
 def test_sync_from_db(fresh_db):
     """schedules 表 → APScheduler job 集合。scheduler 未 start 也可挂 pending job。"""
-    med = meds.create_med("Y")
-    a = sched_svc.create("a", "med", "0 8 * * *", {"med_id": med["id"]})
+    rt = routines.create("Y", "med")
+    a = sched_svc.create("a", "routine", "0 8 * * *", {"routine_id": rt["id"]})
     b = sched_svc.create("b", "reminder", "0 9 * * *", {"title": "t"}, enabled=False)
     core.sync_from_db()
     ids = {j.id for j in core.scheduler.get_jobs()}
@@ -57,15 +57,15 @@ def test_upsert_external_dedupe(fresh_db):
 def test_today_agenda(fresh_db):
     # 2026-08-14 12:00 JST = 03:00 UTC
     clock.set_override(datetime(2026, 8, 14, 3, 0, tzinfo=timezone.utc))
-    med = meds.create_med("Z")
-    sched_svc.create("早药", "med", "0 8 * * *", {"med_id": med["id"]})
-    sched_svc.create("晚药", "med", "30 21 * * *", {"med_id": med["id"]})
+    rt = routines.create("Z药", "med")
+    sched_svc.create("早药", "routine", "0 8 * * *", {"routine_id": rt["id"]})
+    sched_svc.create("晚药", "routine", "30 21 * * *", {"routine_id": rt["id"]})
     sched_svc.create("停用的", "reminder", "0 10 * * *", {"title": "no"}, enabled=False)
     reminders.create("倒垃圾", "", "2026-08-14T09:30:00+09:00")
     agenda = reminders.today_agenda()
     times = [(a["time"], a["title"]) for a in agenda]
-    assert ("08:00", "早药") in times
-    assert ("21:30", "晚药") in times
+    assert ("08:00", "Z药") in times      # routine 类型展开时用 routine 名
+    assert ("21:30", "Z药") in times
     assert ("09:30", "倒垃圾") in times
     assert all(a["title"] != "no" for a in agenda)
     assert times == sorted(times, key=lambda x: x[0])

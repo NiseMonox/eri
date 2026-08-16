@@ -1,4 +1,4 @@
-"""网页(cookie 登录):dashboard / schedules / meds / weights / reminders / settings。
+"""网页(cookie 登录):dashboard / schedules / routines / memories / weights / reminders / settings。
 表单走经典 POST + 302 回跳,零前端构建;图表用 vendored Chart.js。"""
 
 import json
@@ -16,7 +16,7 @@ from ..auth import COOKIE_NAME, require_page_login
 from ..config import settings
 from ..notify.service import notify
 from ..scheduler import jobs
-from ..services import meds, reminders, weights
+from ..services import memories, reminders, routines, weights
 from ..services import schedules as sched_svc
 
 router = APIRouter()
@@ -69,12 +69,14 @@ async def dashboard(request: Request):
         return r
     from ..services import body_metrics
 
+    today_r = routines.today_instances()
     return _render(
         request, "dashboard.html",
         agenda=reminders.today_agenda(),
         done_today=reminders.done_today(),
-        pending=meds.list_logs("pending", 10),
-        missed=meds.list_logs("missed", 10),
+        routine_open=[i for i in today_r if i["status"] in ("pending", "notified")],
+        routine_missed=[i for i in routines.instances(status="missed", limit=10)],
+        routine_done=[i for i in today_r if i["status"] == "done"],
         stats=weights.stats(7),
         body=body_metrics.latest(),
         body_labels=body_metrics.LABELS_JA,
@@ -90,7 +92,7 @@ async def dashboard(request: Request):
 async def schedules_page(request: Request):
     if r := require_page_login(request):
         return r
-    return _render(request, "schedules.html", rows=sched_svc.list_all(), meds=meds.list_meds())
+    return _render(request, "schedules.html", rows=sched_svc.list_all(), routines=routines.list_all())
 
 
 @router.post("/schedules/create")
@@ -147,53 +149,98 @@ async def schedules_run(request: Request, sid: int):
     return _back(request, "/schedules", msg="1回実行したよ。スマホとスピーカーを確認してね")
 
 
-# --- meds ---
+# --- routines ---
 
-@router.get("/meds")
-async def meds_page(request: Request):
+@router.get("/routines")
+async def routines_page(request: Request):
     if r := require_page_login(request):
         return r
-    return _render(request, "meds.html", meds=meds.list_meds(include_inactive=True),
-                   logs=meds.list_logs(limit=30))
+    from datetime import timedelta as _td
+
+    weeks = 12
+    days = [(clock.now_local() - _td(days=i)).strftime("%Y-%m-%d") for i in range(weeks * 7 - 1, -1, -1)]
+    return _render(request, "routines.html",
+                   routines=routines.list_all(include_inactive=True),
+                   categories=routines.CATEGORIES,
+                   heat=routines.heatmap(weeks), days=days,
+                   rates={r["id"]: routines.completion_rate(r["id"], 7) for r in routines.list_all()},
+                   instances=routines.instances(limit=30))
 
 
-@router.post("/meds/create")
-async def meds_create(request: Request, name: str = Form(...), dose: str = Form(""),
-                      notes: str = Form("")):
+@router.post("/routines/create")
+async def routines_create(request: Request, name: str = Form(...), category: str = Form("other"),
+                          detail: str = Form("")):
     if r := require_page_login(request):
         return r
-    meds.create_med(name, dose, notes)
-    return _back(request, "/meds", msg="追加したよ")
+    routines.create(name, category, detail)
+    return _back(request, "/routines", msg="追加したよ")
 
 
-@router.post("/meds/{mid}/toggle")
-async def meds_toggle(request: Request, mid: int):
+@router.post("/routines/{rid}/toggle")
+async def routines_toggle(request: Request, rid: int):
     if r := require_page_login(request):
         return r
-    m = meds.get_med(mid)
-    if m:
-        meds.update_med(mid, active=0 if m["active"] else 1)
-    return _back(request, "/meds")
+    row = routines.get(rid)
+    if row:
+        routines.update(rid, active=0 if row["active"] else 1)
+    return _back(request, "/routines")
 
 
-@router.post("/meds/logs/{log_id}/confirm")
-async def meds_log_confirm(request: Request, log_id: int):
+@router.post("/routines/instances/{iid}/done")
+async def routines_inst_done(request: Request, iid: int):
     if r := require_page_login(request):
         return r
-    row = meds.confirm(log_id=log_id, via="web")
+    row = routines.complete(iid, via="web")
     if row is None:
-        return _back(request, "/meds", err="その記録は見つからなかったよ(削除済みかも)")
-    if row["status"] != "confirmed":
-        return _back(request, "/meds", err=f"この記録は {row['status']} 状態のため変更しなかったよ")
-    return _back(request, "/meds", msg="確認したよ")
+        return _back(request, "/routines", err="その記録は見つからなかったよ")
+    # dashboard 与 routines 页都有完成按钮:回到来源页
+    back_to = "/" if request.headers.get("referer", "").rstrip("/").endswith(":8300") else "/routines"
+    return _back(request, back_to, msg="完了にしたよ")
 
 
-@router.post("/meds/logs/{log_id}/skip")
-async def meds_log_skip(request: Request, log_id: int):
+@router.post("/routines/instances/{iid}/skip")
+async def routines_inst_skip(request: Request, iid: int):
     if r := require_page_login(request):
         return r
-    meds.skip(log_id, via="web")
-    return _back(request, "/meds", msg="スキップしたよ")
+    routines.skip(iid, via="web")
+    return _back(request, "/routines", msg="スキップしたよ")
+
+
+# --- memories ---
+
+@router.get("/memories")
+async def memories_page(request: Request):
+    if r := require_page_login(request):
+        return r
+    return _render(request, "memories.html", rows=memories.list_all(), kinds=memories.KIND_JA)
+
+
+@router.post("/memories/create")
+async def memories_create(request: Request, kind: str = Form("fact"), text: str = Form(...),
+                          valid_until: str = Form("")):
+    if r := require_page_login(request):
+        return r
+    until = clock.local_input_to_utc_iso(valid_until) if valid_until else None
+    memories.add(kind, text, until, source="user")
+    return _back(request, "/memories", msg="覚えたよ")
+
+
+@router.post("/memories/{mid}/delete")
+async def memories_delete(request: Request, mid: int):
+    if r := require_page_login(request):
+        return r
+    memories.deactivate(mid, reason="user")
+    return _back(request, "/memories", msg="忘れたよ")
+
+
+@router.post("/memories/{mid}/update")
+async def memories_update(request: Request, mid: int, text: str = Form(...),
+                          valid_until: str = Form("")):
+    if r := require_page_login(request):
+        return r
+    until = clock.local_input_to_utc_iso(valid_until) if valid_until else None
+    memories.update(mid, text, until)
+    return _back(request, "/memories", msg="更新したよ")
 
 
 # --- weights ---

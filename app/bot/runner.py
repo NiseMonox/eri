@@ -46,7 +46,7 @@ async def _try_start() -> bool:
     app.add_handler(CommandHandler("today", handlers.cmd_today))
     app.add_handler(CommandHandler("chart", handlers.cmd_chart))
     app.add_handler(CommandHandler("report", handlers.cmd_report))
-    app.add_handler(CommandHandler("med", handlers.cmd_med))
+    app.add_handler(CommandHandler(["routine", "med"], handlers.cmd_routine))
     app.add_handler(CallbackQueryHandler(handlers.on_callback))
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.UpdateType.MESSAGE, handlers.on_text))

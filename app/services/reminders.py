@@ -219,10 +219,22 @@ def today_agenda() -> list[dict]:
     items: list[dict] = []
 
     rows = db.get_db().execute(
-        "SELECT * FROM schedules WHERE enabled=1 AND type IN ('med','weight_prompt','reminder')"
+        "SELECT * FROM schedules WHERE enabled=1 AND type IN ('routine','med','weight_prompt','reminder')"
     ).fetchall()
+    routine_cache: dict[int, dict] = {}
     for r in rows:
         payload = json.loads(r["payload"] or "{}")
+        title = payload.get("title") or r["name"]
+        icon = None
+        kind = "routine" if r["type"] == "med" else r["type"]
+        if kind == "routine":
+            rid = payload.get("routine_id") or payload.get("med_id")
+            if rid:
+                if rid not in routine_cache:
+                    row = db.get_db().execute("SELECT name, icon FROM routines WHERE id=?", (rid,)).fetchone()
+                    routine_cache[rid] = dict(row) if row else {}
+                title = routine_cache[rid].get("name") or title
+                icon = routine_cache[rid].get("icon")
         # get_next 严格大于基准:退 1 秒让 00:00 整点的任务也进当日清单
         it = croniter(r["cron"], start - timedelta(seconds=1))
         while True:
@@ -232,13 +244,15 @@ def today_agenda() -> list[dict]:
             items.append({
                 "time": t.strftime("%H:%M"),
                 "when": t.strftime("%Y-%m-%d %H:%M"),   # 快捷指令可直接转日期
-                "kind": r["type"],
-                "title": payload.get("title") or r["name"],
+                "kind": kind,
+                "icon": icon,
+                "title": title,
                 "schedule_id": r["id"],
             })
 
     for r in db.get_db().execute(
-        "SELECT * FROM reminders WHERE status IN ('pending','notified') AND due_at >= ? AND due_at < ?",
+        "SELECT * FROM reminders WHERE status IN ('pending','notified') AND due_at >= ? AND due_at < ? "
+        "AND kind='reminder' AND schedule_id IS NULL",
         (clock.iso(start), clock.iso(end)),
     ).fetchall():
         local = clock.to_local(clock.parse_iso(r["due_at"]))

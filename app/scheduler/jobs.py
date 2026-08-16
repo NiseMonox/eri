@@ -8,7 +8,7 @@ from ..audio import tts
 from ..audio.manager import audio_manager
 from ..config import settings
 from ..notify.service import notify
-from ..services import meds, reminders, weights
+from ..services import memories, reminders, routines, weights
 
 
 async def run_schedule(schedule_id: int, force: bool = False) -> None:
@@ -56,18 +56,22 @@ async def dispatch(type_: str, payload: dict, row: dict | None) -> None:
             await notify("alarm", "起床アラーム", "タップで停止できるよ", url=stop_url,
                          channel="bark", ref_type="schedule", ref_id=schedule_id)
 
-    elif type_ == "med":
-        med_id = payload.get("med_id")
-        med = meds.get_med(med_id) if med_id else None
-        if med is None:
-            raise ValueError(f"med schedule 缺少有效 med_id: {payload}")
-        if not med["active"]:
-            events.log("med_inactive_skipped", {"med_id": med["id"], "name": med["name"]},
+    elif type_ in ("routine", "med"):    # med = 旧别名
+        rid = payload.get("routine_id") or payload.get("med_id")
+        routine = routines.get(rid) if rid else None
+        if routine is None:
+            raise ValueError(f"routine schedule 缺少有效 routine_id: {payload}")
+        if not routine["active"]:
+            events.log("routine_inactive_skipped", {"routine_id": routine["id"]},
                        "schedule", schedule_id)
             return
-        log = meds.create_due_log(med["id"], schedule_id, params=payload)
-        await _send_med_notice(log | {"med_name": med["name"], "med_dose": med["dose"]})
-        await tts.announce_med(med["name"])
+        inst = routines.create_instance(routine, schedule_id, payload.get("nag"),
+                                        force=(row is None))
+        if inst is None:
+            return  # 还有未关闭实例(misfire 重复触发),不再打扰
+        reminders.mark_notified(inst["id"])
+        await _send_routine_notice(inst, routine)
+        await tts.announce_routine(routine)
 
     elif type_ == "weight_prompt":
         await notify("med", name or "体重記録",
@@ -95,22 +99,25 @@ async def dispatch(type_: str, payload: dict, row: dict | None) -> None:
         raise ValueError(f"unknown schedule type: {type_}")
 
 
-async def _send_med_notice(log: dict, nth: int = 0) -> None:
-    title = f"お薬の時間:{log['med_name']}" + (f" {log['med_dose']}" if log.get("med_dose") else "")
+async def _send_routine_notice(inst: dict, routine: dict, nth: int = 0) -> None:
+    cat = routines.CATEGORIES.get(routine.get("category", "other"), routines.CATEGORIES["other"])
+    label = "お薬の時間" if routine.get("category") == "med" else f"{cat['ja']}の時間"
+    title = f"{cat['icon']} {label}:{routine['name']}" + (f"({routine['detail']})" if routine.get("detail") else "")
     if nth:
         title = f"[{nth}回目] " + title
-    confirm_url = f"{settings.base_url}/c/med/{log['token']}"
+    confirm_url = f"{settings.base_url}/c/r/{inst['token']}"
     # inline 按钮只在 bot 运行时挂(bot 是 callback 的唯一消费端,不然按钮假死)
     from ..bot import runner as bot_runner
 
     buttons = None
     if bot_runner.configured():
-        buttons = [("✅ 飲んだよ", f"medconfirm:{log['id']}"), ("今回はスキップ", f"medskip:{log['id']}")]
+        done_label = "✅ 飲んだよ" if routine.get("category") == "med" else "✅ やったよ"
+        buttons = [(done_label, f"rdone:{inst['id']}"), ("今回はスキップ", f"rskip:{inst['id']}")]
     await notify(
-        "med", title, "通知タップで服薬確認できるよ",
+        cat["notify_profile"], title, "通知タップで完了にできるよ",
         url=confirm_url,
         tg_buttons=buttons,
-        ref_type="med_log", ref_id=log["id"],
+        ref_type="reminder", ref_id=inst["id"],
     )
 
 
@@ -132,6 +139,9 @@ async def run_report(payload: dict) -> None:
     body_line = body_metrics.summary_ja()
     if body_line:
         text += f"\n最新の体組成:{body_line}"
+    routine_line = routines.weekly_summary_ja()
+    if routine_line:
+        text += f"\n今週のルーティン:{routine_line}"
     # LLM 文案是锦上添花:失败/关闭时纯统计照发
     narrative = await llm.complete(
         f"体重数据统计:{text}。逐条明细(东京时间):"
@@ -151,33 +161,29 @@ async def run_report(payload: dict) -> None:
 
 # --- 内部固定 job(各自兜底 try/except:内部 job 没有 run_schedule 的保护壳)---
 
-async def med_sweeper() -> None:
-    try:
-        for log, action in meds.sweep():
-            if action == "resend":
-                await _send_med_notice(log, nth=log["remind_count"])
-            else:
-                await notify("info", f"飲み忘れ扱いにしたよ:{log['med_name']}",
-                             "猶予時間を過ぎたよ。飲んだら画面かチャットで教えてね",
-                             ref_type="med_log", ref_id=log["id"])
-    except Exception as e:  # noqa: BLE001
-        events.log("sweeper_error", {"job": "med_sweeper", "error": str(e)})
-
-
 async def reminder_sweeper() -> None:
+    """提醒与 routine 实例统一巡检:到点首播(含 snooze 回来的)→ 追催 → 超时作罢。"""
     try:
-        # 到点首播(含 snooze 回来的)
         for r in reminders.due_pending():
-            await notify("info", f"リマインダー:{r['title']}", r.get("body") or "",
-                         ref_type="reminder", ref_id=r["id"])
             reminders.mark_notified(r["id"])
-            await tts.announce_reminder(r["title"])
-        # 无回应追催 / 超时作罢
+            if r.get("kind") == "routine":
+                routine = routines.get(r["routine_id"]) or {"name": r["title"], "category": "other"}
+                await _send_routine_notice(r, routine)
+                await tts.announce_routine(routine)
+            else:
+                await notify("info", f"リマインダー:{r['title']}", r.get("body") or "",
+                             ref_type="reminder", ref_id=r["id"])
+                await tts.announce_reminder(r["title"])
         for row, act in reminders.sweep_nag():
+            is_routine = row.get("kind") == "routine"
+            routine = routines.get(row["routine_id"]) if is_routine else None
             if act == "renag":
-                await notify("med", f"[{row['remind_count']}回目] リマインダー:{row['title']}",
-                             "「終わったよ」か「後でね」って返してくれればOKだよ",
-                             ref_type="reminder", ref_id=row["id"])
+                if routine:
+                    await _send_routine_notice(row, routine, nth=row["remind_count"])
+                else:
+                    await notify("med", f"[{row['remind_count']}回目] リマインダー:{row['title']}",
+                                 "「終わったよ」か「後でね」って返してくれればOKだよ",
+                                 ref_type="reminder", ref_id=row["id"])
                 await tts.announce_nag(row["title"], row["remind_count"])
             else:
                 await notify("info", f"いったん諦めたよ:{row['title']}",
@@ -185,6 +191,13 @@ async def reminder_sweeper() -> None:
                              ref_type="reminder", ref_id=row["id"])
     except Exception as e:  # noqa: BLE001
         events.log("sweeper_error", {"job": "reminder_sweeper", "error": str(e)})
+
+
+async def memory_cleanup() -> None:
+    try:
+        await memories.nightly_cleanup()
+    except Exception as e:  # noqa: BLE001
+        events.log("memory_error", {"job": "memory_cleanup", "error": str(e)[:200]})
 
 
 async def daily_backup() -> None:

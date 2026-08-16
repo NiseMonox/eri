@@ -19,7 +19,7 @@ scheduler = AsyncIOScheduler(timezone=clock.TOKYO)
 
 # 重启跨过触发点时的补发窗口(秒):错过不超过这个时长的 med/提醒类任务开机补跑一次
 CATCHUP_WINDOW_SEC = 3 * 3600
-CATCHUP_TYPES = ("med", "weight_prompt", "reminder")
+CATCHUP_TYPES = ("routine", "med", "weight_prompt", "reminder")
 
 
 class CroniterTrigger(BaseTrigger):
@@ -72,13 +72,13 @@ def sync_from_db() -> None:
 
 def register_internal() -> None:
     common = dict(replace_existing=True, coalesce=True)
-    scheduler.add_job(jobs.med_sweeper, "interval", minutes=5, id="int:med_sweeper",
-                      misfire_grace_time=120, **common)
     scheduler.add_job(jobs.reminder_sweeper, "interval", minutes=1, id="int:reminder_sweeper",
                       misfire_grace_time=55, **common)
     scheduler.add_job(jobs.daily_backup, CroniterTrigger("30 4 * * *"), id="int:backup",
                       misfire_grace_time=3600, **common)
     scheduler.add_job(jobs.weekly_trim, CroniterTrigger("0 5 * * 1"), id="int:trim",
+                      misfire_grace_time=3600, **common)
+    scheduler.add_job(jobs.memory_cleanup, CroniterTrigger("0 4 * * *"), id="int:memory_cleanup",
                       misfire_grace_time=3600, **common)
     from ..ingest.withings import poll_if_due
 
@@ -99,7 +99,7 @@ def catchup_missed() -> list[int]:
     now = clock.now_local()
     to_run: list[int] = []
     rows = db.get_db().execute(
-        "SELECT id, cron, type, last_run_at FROM schedules WHERE enabled=1 AND type IN (?,?,?)",
+        "SELECT id, cron, type, last_run_at FROM schedules WHERE enabled=1 AND type IN (?,?,?,?)",
         CATCHUP_TYPES,
     ).fetchall()
     for r in rows:

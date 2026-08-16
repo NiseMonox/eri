@@ -140,6 +140,19 @@ async def announce_med(med_name: str) -> bool:
     return await announce(f"お薬の時間だよ。{name}、忘れないでね")
 
 
+async def announce_routine(routine: dict) -> bool:
+    """按分类换句式:med→お薬の時間;exercise→運動の時間;其余→{name}の時間。"""
+    name = await ensure_ja(routine.get("name", ""))
+    cat = routine.get("category", "other")
+    if cat == "med":
+        return await announce(f"お薬の時間だよ。{name}、忘れないでね")
+    if cat == "exercise":
+        return await announce(f"運動の時間だよ。{name}、行こう!")
+    if cat == "care":
+        return await announce(f"ケアの時間だよ。{name}、やろうね")
+    return await announce(f"{name}の時間だよ")
+
+
 async def announce_weight() -> bool:
     return await announce("体重を測ろう")
 
