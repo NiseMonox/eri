@@ -25,6 +25,7 @@ EDITABLE_KEYS = {
     "chat.context_hours": 72,          # 短期对话窗口(小时)
     "chat.context_budget_tokens": 1500,  # 短期对话注入上限(粗估 token)
     "memory.enabled": True,            # 长期记忆自动维护开关
+    "memory.context_budget_tokens": 600,   # 长期记忆注入上限(粗估 token)
 }
 
 

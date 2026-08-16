@@ -80,6 +80,16 @@ def deactivate(mid: int, reason: str = "manual") -> bool:
     return cur.rowcount > 0
 
 
+def reactivate(mid: int) -> bool:
+    conn = db.get_db()
+    cur = conn.execute("UPDATE memories SET active=1, updated_at=? WHERE id=? AND active=0",
+                       (clock.now_iso(), mid))
+    conn.commit()
+    if cur.rowcount:
+        events.log("memory_reactivate", None, "memory", mid)
+    return cur.rowcount > 0
+
+
 def list_active(kind: str | None = None) -> list[dict]:
     """有效记忆:active 且未过期。"""
     q = "SELECT * FROM memories WHERE active=1 AND (valid_until IS NULL OR valid_until >= ?)"
@@ -99,16 +109,33 @@ def list_all(include_inactive: bool = False) -> list[dict]:
 
 # --- 注入 ---
 
+KIND_PRIORITY = {"schedule": 0, "mood": 1, "preference": 2, "fact": 3}
+
+
+def _est_tokens(s: str) -> int:
+    cjk = sum(1 for ch in s if "　" <= ch <= "鿿" or "＀" <= ch <= "￯")
+    return cjk + max(0, len(s) - cjk) // 4 + 1
+
+
 def context_block() -> str:
-    """给 conversation 的【长期记忆】段。上限 MAX_INJECT 条。"""
-    rows = list_active()[:MAX_INJECT]
-    if not rows:
-        return ""
+    """给 conversation 的【长期记忆】段。按时效优先(schedule→mood→preference→fact),
+    同类按到期时间;按 memory.context_budget_tokens(默认 600)累加截断,超预算的靠后条目不注入。"""
+    from .. import store
+
+    budget = int(store.get("memory.context_budget_tokens", 600) or 600)
+    rows = sorted(list_active(), key=lambda r: (KIND_PRIORITY.get(r["kind"], 9),
+                                                r["valid_until"] or "9999", r["id"]))
     lines = ["【长期记忆】(id 供「忘掉」引用)"]
+    used = 0
     for r in rows:
         until = f"(〜{clock.fmt_local(r['valid_until'], '%m/%d %H:%M')})" if r["valid_until"] else ""
-        lines.append(f"- [{r['id']}] {KIND_JA.get(r['kind'], r['kind'])}: {r['text']}{until}")
-    return "\n".join(lines)
+        line = f"- [{r['id']}] {KIND_JA.get(r['kind'], r['kind'])}: {r['text']}{until}"
+        t = _est_tokens(line)
+        if used + t > budget:
+            break
+        lines.append(line)
+        used += t
+    return "\n".join(lines) if len(lines) > 1 else ""
 
 
 def _listing_for_llm() -> str:
@@ -134,10 +161,33 @@ def _parse(raw: str | None) -> dict | None:
         return None
 
 
+MAX_TOUCH_FLOOR = 3      # 单批 update+remove 至少允许 3 条
+MAX_TOUCH_RATIO = 0.34   # 超过 active 的 1/3 视为坏输出,整批拒绝
+
+
 def apply_ops(ops: dict, source: str = "assistant") -> dict:
-    """执行 LLM 给的增删改;id 必须在 active 集合内(幻觉 id 直接忽略)。返回计数。"""
+    """执行 LLM 给的增删改;id 必须在 active 集合内(幻觉 id 直接忽略)。
+    护栏:一批里 update+remove 触碰的条数超过 max(3, 34% active) → 整批拒绝并记事件
+    (防止一次坏输出/截断把记忆清空)。返回计数(rejected=True 时全零)。"""
     active_ids = {r["id"] for r in list_all()}
     n = {"add": 0, "update": 0, "remove": 0}
+
+    def _ids(items):
+        out = set()
+        for it in items or []:
+            v = it.get("id") if isinstance(it, dict) else it
+            try:
+                out.add(int(v))
+            except (TypeError, ValueError):
+                continue
+        return out & active_ids
+
+    touched = _ids(ops.get("update")) | _ids(ops.get("remove"))
+    limit = max(MAX_TOUCH_FLOOR, int(len(active_ids) * MAX_TOUCH_RATIO + 0.999))
+    if len(touched) > limit and len(active_ids) > MAX_TOUCH_FLOOR:
+        events.log("memory_ops_rejected", {"touched": len(touched), "limit": limit,
+                                           "active": len(active_ids), "source": source})
+        return {**n, "rejected": True}
     for item in ops.get("add") or []:
         if not isinstance(item, dict) or not item.get("text"):
             continue
@@ -182,7 +232,7 @@ async def maintain_after_turn(user_text: str, assistant_reply: str) -> dict | No
     now = clock.now_local().strftime("%Y-%m-%d %H:%M (%A)")
     prompt = (f"【当前时间(东京)】{now}\n【现有记忆】\n{_listing_for_llm()}\n\n"
               f"【本轮对话】\n用户: {user_text}\n艾莉: {assistant_reply}")
-    ops = _parse(await llm.complete(prompt, system=MAINTAIN_SYSTEM, timeout=40))
+    ops = _parse(await llm.complete(prompt, system=MAINTAIN_SYSTEM, timeout=40, purpose="maintain"))
     if ops is None:
         return None
     n = apply_ops(ops)
@@ -204,7 +254,7 @@ async def nightly_cleanup() -> dict:
     n = {"expired": expired, "update": 0, "remove": 0}
     if len(list_active()) >= 2:
         ops = _parse(await llm.complete(f"【现有记忆】\n{_listing_for_llm()}",
-                                        system=CLEANUP_SYSTEM, timeout=60))
+                                        system=CLEANUP_SYSTEM, timeout=60, purpose="maintain"))
         if ops:
             ops.pop("add", None)   # 清理阶段不新增
             r = apply_ops(ops, source="system")

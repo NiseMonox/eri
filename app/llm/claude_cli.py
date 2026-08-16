@@ -7,7 +7,8 @@ import json
 
 from .. import store
 
-_sem = asyncio.Semaphore(1)
+# 两个串行槽:交互式(parse)与后台(report/maintain)各一,后台任务不再让用户下一句排队等 40 秒
+_sems = {"interactive": asyncio.Semaphore(1), "background": asyncio.Semaphore(1)}
 DEFAULT_TIMEOUT = 45   # 交互式解析等不起 2 分钟;周报这类后台任务由调用方放宽
 
 FALLBACK_SYSTEM = "You are a concise assistant. Follow the user's formatting instructions exactly."
@@ -17,6 +18,10 @@ def model_for(purpose: str) -> str:
     """purpose ∈ parse|report。settings: llm.claude_model_parse / llm.claude_model_report(默认都 sonnet)。"""
     key = "llm.claude_model_report" if purpose == "report" else "llm.claude_model_parse"
     return str(store.get(key, "sonnet") or "sonnet")
+
+
+def _lane(purpose: str) -> str:
+    return "background" if purpose in ("report", "maintain") else "interactive"
 
 
 async def complete(prompt: str, system: str = "", timeout: int = DEFAULT_TIMEOUT,
@@ -30,7 +35,7 @@ async def complete(prompt: str, system: str = "", timeout: int = DEFAULT_TIMEOUT
         "--no-session-persistence",
         "--strict-mcp-config",               # 不加载任何 MCP
     ]
-    async with _sem:
+    async with _sems[_lane(purpose)]:
         proc = await asyncio.create_subprocess_exec(
             *args,
             stdin=asyncio.subprocess.PIPE,

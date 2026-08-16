@@ -110,9 +110,14 @@ async def handle(text: str, via: str) -> dict:
     res = await _execute(action, text, via)
     _log(via, "user", text)
     _log(via, "assistant", res["reply"])
-    if store.get("memory.enabled", True):
-        asyncio.create_task(_maintain_safe(text, res["reply"]))
+    if store.get("memory.enabled", True) and raw is not None:
+        # 持引用防 GC;决策 LLM 都失败时不再追加一次维护调用
+        _bg.add(t := asyncio.create_task(_maintain_safe(text, res["reply"])))
+        t.add_done_callback(_bg.discard)
     return res
+
+
+_bg: set = set()
 
 
 async def _maintain_safe(user_text: str, reply: str) -> None:

@@ -212,7 +212,17 @@ async def routines_inst_skip(request: Request, iid: int):
 async def memories_page(request: Request):
     if r := require_page_login(request):
         return r
-    return _render(request, "memories.html", rows=memories.list_all(), kinds=memories.KIND_JA)
+    return _render(request, "memories.html", rows=memories.list_all(),
+                   inactive=[m for m in memories.list_all(include_inactive=True) if not m["active"]][:30],
+                   kinds=memories.KIND_JA)
+
+
+@router.post("/memories/{mid}/reactivate")
+async def memories_reactivate(request: Request, mid: int):
+    if r := require_page_login(request):
+        return r
+    memories.reactivate(mid)
+    return _back(request, "/memories", msg="思い出したよ")
 
 
 @router.post("/memories/create")

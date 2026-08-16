@@ -40,7 +40,8 @@ def get(rid: int) -> dict | None:
 def _row(row) -> dict:
     d = dict(row)
     d["nag"] = json.loads(d["nag"]) if d.get("nag") else None
-    d.setdefault("icon", CATEGORIES.get(d.get("category", "other"), CATEGORIES["other"])["icon"])
+    if not d.get("icon"):
+        d["icon"] = CATEGORIES.get(d.get("category", "other"), CATEGORIES["other"])["icon"]
     return d
 
 
@@ -68,15 +69,17 @@ def update(rid: int, **fields) -> dict | None:
 
 def create_instance(routine: dict, schedule_id: int | None, nag_override: dict | None = None,
                     force: bool = False) -> dict | None:
-    """生成一次「该做 XX 了」实例;同 routine 有未关闭实例则跳过(防 misfire)。
+    """生成一次「该做 XX 了」实例。去重与 reminders.create_instance 对齐:按 **schedule_id**
+    (同一 schedule 还有未关闭实例才跳过,防 misfire 重复);同 routine 的早晚两个 schedule 各自独立。
     force=True 用于 oneshot 测试:不受该去重约束。返回含一次性确认 token 的行。"""
     conn = db.get_db()
-    if not force:
+    if not force and schedule_id is not None:
         exists = conn.execute(
-            "SELECT 1 FROM reminders WHERE routine_id=? AND status IN ('pending','notified') LIMIT 1",
-            (routine["id"],),
+            "SELECT 1 FROM reminders WHERE schedule_id=? AND status IN ('pending','notified') LIMIT 1",
+            (schedule_id,),
         ).fetchone()
         if exists:
+            events.log("routine_dedup_skipped", {"routine_id": routine["id"]}, "schedule", schedule_id)
             return None
     nag = nag_override or routine.get("nag")
     cur = conn.execute(
@@ -117,17 +120,19 @@ def complete(instance_id: int, via: str = "web") -> dict | None:
 
 
 def skip(instance_id: int, via: str = "web") -> dict | None:
+    """跳过(pending/notified/missed → dismissed):「今日はナシ」对超时的也成立。"""
     row = reminders.get(instance_id)
-    if row is None or row["status"] not in ("pending", "notified"):
+    if row is None or row["status"] not in ("pending", "notified", "missed"):
         return row
     conn = db.get_db()
     conn.execute(
         "UPDATE reminders SET status='dismissed', done_at=?, done_via=? "
-        "WHERE id=? AND status IN ('pending','notified')",
+        "WHERE id=? AND status IN ('pending','notified','missed')",
         (clock.now_iso(), via, instance_id),
     )
     conn.commit()
-    events.log("routine_skipped", {"via": via}, "reminder", instance_id)
+    events.log("routine_skipped", {"via": via, "late": row["status"] == "missed"},
+               "reminder", instance_id)
     return reminders.get(instance_id)
 
 
@@ -145,8 +150,8 @@ def latest_open(category: str | None = None) -> dict | None:
 
 
 def instances(routine_id: int | None = None, status: str | None = None, limit: int = 100) -> list[dict]:
-    q = ("SELECT r.*, t.name AS routine_name, t.category, t.icon FROM reminders r "
-         "JOIN routines t ON t.id=r.routine_id WHERE r.kind='routine'")
+    q = ("SELECT r.*, t.name AS routine_name, t.category, COALESCE(t.icon,'📌') AS icon "
+         "FROM reminders r JOIN routines t ON t.id=r.routine_id WHERE r.kind='routine'")
     args: list = []
     if routine_id:
         q += " AND r.routine_id=?"
@@ -162,8 +167,8 @@ def instances(routine_id: int | None = None, status: str | None = None, limit: i
 def today_instances() -> list[dict]:
     start = clock.now_local().replace(hour=0, minute=0, second=0, microsecond=0)
     rows = db.get_db().execute(
-        "SELECT r.*, t.name AS routine_name, t.category, t.icon FROM reminders r "
-        "JOIN routines t ON t.id=r.routine_id WHERE r.kind='routine' AND r.due_at>=? "
+        "SELECT r.*, t.name AS routine_name, t.category, COALESCE(t.icon,'📌') AS icon "
+        "FROM reminders r JOIN routines t ON t.id=r.routine_id WHERE r.kind='routine' AND r.due_at>=? "
         "ORDER BY r.due_at",
         (clock.iso(start),),
     ).fetchall()

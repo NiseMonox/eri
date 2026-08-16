@@ -147,3 +147,51 @@ def test_recent_chat_budget(fresh_db):
     conn.execute("UPDATE chat_log SET ts=?", (clock.iso(T0 - timedelta(days=4)),))
     conn.commit()
     assert conversation._recent_chat() == []
+
+
+def test_apply_ops_rejects_mass_removal(fresh_db):
+    """一批 LLM 输出想删掉大部分记忆 → 整批拒绝(防坏输出清空)。"""
+    clock.set_override(T0)
+    ids = [memories.add("fact", f"事实{i}")["id"] for i in range(6)]
+    n = memories.apply_ops({"remove": ids})
+    assert n.get("rejected") is True and len(memories.list_active()) == 6
+    # 小规模 remove 正常执行
+    n2 = memories.apply_ops({"remove": ids[:2]})
+    assert n2["remove"] == 2 and len(memories.list_active()) == 4
+    # 可恢复
+    assert memories.reactivate(ids[0]) is True and len(memories.list_active()) == 5
+
+
+def test_routine_two_schedules_independent(fresh_db):
+    """同 routine 的早晚两个 schedule 各自实例化(去重按 schedule_id)。"""
+    clock.set_override(T0)
+    rt = routines.create("降压药", "med")
+    a = routines.create_instance(rt, schedule_id=1)
+    reminders.mark_notified(a["id"])
+    reminders.snooze(a["id"], clock.iso(T0 + timedelta(hours=10)))   # 早上的推迟到晚上
+    b = routines.create_instance(rt, schedule_id=2)                    # 晚间 schedule 照常
+    assert b is not None and b["id"] != a["id"]
+    assert routines.create_instance(rt, schedule_id=2) is None         # 同 schedule 才去重
+
+
+def test_routine_skip_accepts_missed(fresh_db):
+    clock.set_override(T0)
+    rt = routines.create("ジム", "exercise", nag={"every_min": 1, "max": 1, "grace_min": 2})
+    inst = routines.create_instance(rt, schedule_id=3)
+    reminders.mark_notified(inst["id"])
+    _advance(3)
+    reminders.sweep_nag()
+    assert reminders.get(inst["id"])["status"] == "missed"
+    row = routines.skip(inst["id"], via="siri")
+    assert row["status"] == "dismissed"
+
+
+def test_context_block_priority_and_budget(fresh_db):
+    clock.set_override(T0)
+    store.set("memory.context_budget_tokens", 60)
+    memories.add("fact", "長い事実" * 5)
+    memories.add("schedule", "8/20 面接", valid_until=clock.iso(T0 + timedelta(days=4)))
+    memories.add("preference", "夜型")
+    block = memories.context_block()
+    assert "面接" in block                      # schedule 优先注入
+    assert block.index("面接") < block.index("夜型") if "夜型" in block else True

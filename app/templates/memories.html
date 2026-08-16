@@ -41,4 +41,17 @@
 {% endif %}
 {% endfor %}
 {% if not rows %}<p class="muted">まだ何も覚えてないよ。話しかけてみて。</p>{% endif %}
+
+{% if inactive %}
+<details class="card" style="opacity:.8">
+  <summary class="muted">忘れたもの(直近 {{ inactive|length }} 件、復元できるよ)</summary>
+  <table style="margin-top:8px">
+    {% for m in inactive %}
+    <tr><td class="muted">{{ kinds.get(m.kind, m.kind) }}</td><td>{{ m.text }}</td>
+        <td class="muted">{{ m.updated_at | fmt_local }}</td>
+        <td><form class="inline" method="post" action="/memories/{{ m.id }}/reactivate"><button class="small">思い出す</button></form></td></tr>
+    {% endfor %}
+  </table>
+</details>
+{% endif %}
 {% endblock %}

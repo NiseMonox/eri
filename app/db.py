@@ -58,14 +58,15 @@ ALTER TABLE reminders ADD COLUMN token TEXT;
 ALTER TABLE reminders ADD COLUMN done_via TEXT;
 CREATE INDEX idx_reminders_routine ON reminders(routine_id, due_at);
 CREATE UNIQUE INDEX idx_reminders_token ON reminders(token) WHERE token IS NOT NULL;
-INSERT INTO routines (id, name, category, detail, active, created_at)
+INSERT INTO routines (id, name, category, detail, icon, active, created_at)
   SELECT id, name, 'med',
          TRIM(COALESCE(dose,'') || CASE WHEN notes IS NOT NULL AND notes<>'' THEN ' / '||notes ELSE '' END),
-         active, created_at FROM meds;
+         '💊', active, created_at FROM meds;
 INSERT INTO reminders (title, body, due_at, status, done_at, created_at, schedule_id,
                        remind_count, nag, notified_at, kind, routine_id, token, done_via)
   SELECT m.name, '', l.due_at,
-         CASE l.status WHEN 'confirmed' THEN 'done' WHEN 'skipped' THEN 'dismissed' ELSE l.status END,
+         CASE l.status WHEN 'confirmed' THEN 'done' WHEN 'skipped' THEN 'dismissed'
+                       WHEN 'pending' THEN 'notified' ELSE l.status END,
          l.confirmed_at, l.created_at, l.schedule_id, l.remind_count,
          REPLACE(REPLACE(COALESCE(l.params,''), 'resend_every_min', 'every_min'), 'max_resends', 'max'),
          l.due_at, 'routine', l.med_id, l.token, l.confirm_via

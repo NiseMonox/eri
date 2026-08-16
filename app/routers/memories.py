@@ -45,6 +45,13 @@ async def delete_memory(mid: int):
     return {"deleted": mid}
 
 
+@router.post("/memories/{mid}/reactivate")
+async def reactivate_memory(mid: int):
+    if not svc.reactivate(mid):
+        raise HTTPException(404, "not found or already active")
+    return svc.get(mid)
+
+
 @router.post("/memories/cleanup")
 async def run_cleanup():
     """手动触发一次夜间清理(测试用)。"""

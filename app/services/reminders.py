@@ -231,8 +231,9 @@ def today_agenda() -> list[dict]:
             rid = payload.get("routine_id") or payload.get("med_id")
             if rid:
                 if rid not in routine_cache:
-                    row = db.get_db().execute("SELECT name, icon FROM routines WHERE id=?", (rid,)).fetchone()
-                    routine_cache[rid] = dict(row) if row else {}
+                    from . import routines as _rt
+
+                    routine_cache[rid] = _rt.get(rid) or {}
                 title = routine_cache[rid].get("name") or title
                 icon = routine_cache[rid].get("icon")
         # get_next 严格大于基准:退 1 秒让 00:00 整点的任务也进当日清单
