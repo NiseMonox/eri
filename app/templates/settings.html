@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}設定 - Eri{% endblock %}
+{% block content %}
+<h1>設定</h1>
+
+<div class="card">
+  <p>
+    Bark:<span class="badge {{ 'on' if bark_ok }}">{{ "設定済み" if bark_ok else "未設定(.env BARK_DEVICE_KEY)" }}</span>
+    Telegram:<span class="badge {{ 'on' if tg_ok }}">{{ "設定済み" if tg_ok else "未設定" }}</span>
+  </p>
+  <form class="inline" method="post" action="/settings/test-notify"><input type="hidden" name="profile" value="info"><button class="small">通常通知テスト</button></form>
+  <form class="inline" method="post" action="/settings/test-notify"><input type="hidden" name="profile" value="med"><button class="small">時限通知テスト</button></form>
+  <form class="inline" method="post" action="/settings/test-notify"><input type="hidden" name="profile" value="alarm"><button class="small">重大警報テスト(鳴るよ)</button></form>
+  <form class="inline" method="post" action="/settings/tts-test">
+    <input name="text" value="こんにちは、エリだよ" style="width:220px">
+    <button class="small">🔊 読み上げテスト</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2 style="margin-top:0">実行パラメータ(JSON、保存で即反映)</h2>
+  <form method="post" action="/settings/update">
+    <table>
+      {% for k, v in values.items() %}
+      <tr><td style="width:220px"><code>{{ k }}</code></td>
+          <td><input name="{{ k }}" value="{{ v | tojson_cn }}" style="width:100%"></td></tr>
+      {% endfor %}
+    </table>
+    <div class="formrow"><button class="primary">保存</button></div>
+  </form>
+  <p class="muted">
+    audio.alsa_device:サウンドカード直通後は <code>"alsa/plughw:CARD=..."</code>(コンテナ内 <code>aplay -L</code> で確認)。空=デフォルト。<br>
+    med.defaults:服薬リマインドの再送パラメータ。schedule payload でタスクごとに上書き可。
+  </p>
+</div>
+{% endblock %}

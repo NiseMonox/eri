@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{% block title %}Eri{% endblock %}</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<nav>
+  <span class="brand">✨ Eri · 艾莉</span>
+  <a href="/">ホーム</a>
+  <a href="/schedules">スケジュール</a>
+  <a href="/meds">お薬</a>
+  <a href="/weights">体重</a>
+  <a href="/reminders">リマインダー</a>
+  <a href="/settings">設定</a>
+  <a class="right" href="/logout">ログアウト</a>
+</nav>
+<main>
+{% if msg %}<div class="flash ok">{{ msg }}</div>{% endif %}
+{% if err %}<div class="flash bad">{{ err }}</div>{% endif %}
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>

@@ -1,0 +1,10 @@
+.env
+.venv/
+data/
+media/*.opus
+media/*.mp3
+__pycache__/
+*.pyc
+.pytest_cache/
+deploy/bark/bark-data/
+media/*.wav

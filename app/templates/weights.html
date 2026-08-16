@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}体重 - Eri{% endblock %}
+{% block content %}
+<h1>体重</h1>
+
+<div class="card">
+  <form method="post" action="/weights/create">
+    <div class="formrow">
+      <input name="weight_kg" type="number" step="0.05" min="20" max="300" placeholder="62.5" required>
+      <span>kg</span>
+      <input name="measured_at" type="datetime-local">
+      <span class="muted">(空欄=今)</span>
+      <button class="primary">記録</button>
+    </div>
+  </form>
+  {% if stats %}
+  <p class="muted">直近30日:{{ stats.count }}回 / 平均 {{ stats.avg }}kg / 範囲 {{ stats.min }}–{{ stats.max }}kg / 変化 {{ "%+.2f"|format(stats.delta) }}kg</p>
+  {% endif %}
+  <canvas id="wchart" height="140"></canvas>
+</div>
+
+<div class="card">
+  <table>
+    <tr><th>測定時刻</th><th>kg</th><th>ソース</th><th></th></tr>
+    {% for w in rows %}
+    <tr>
+      <td>{{ w.measured_at | fmt_local("%Y-%m-%d %H:%M") }}</td>
+      <td>{{ "%.2f"|format(w.weight_kg) }}</td>
+      <td class="muted">{{ w.source }}</td>
+      <td><form class="inline" method="post" action="/weights/{{ w.id }}/delete" onsubmit="return confirm('この記録を削除する?')"><button class="small">削除</button></form></td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<script src="/static/chart.umd.js"></script>
+<script>
+fetch("/api/weights/series?days=90").then(r => r.json()).then(data => {
+  const css = getComputedStyle(document.documentElement);
+  new Chart(document.getElementById("wchart"), {
+    type: "line",
+    data: { labels: data.map(d => d.t.slice(5, 10)),
+            datasets: [{ data: data.map(d => d.kg), borderColor: css.getPropertyValue("--series").trim(),
+                         borderWidth: 2, pointRadius: 3, tension: 0.15 }] },
+    options: {
+      plugins: { legend: { display: false }, tooltip: { callbacks: {
+        title: items => data[items[0].dataIndex].t, label: item => item.parsed.y + " kg" } } },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: css.getPropertyValue("--muted").trim(), maxTicksLimit: 10 } },
+        y: { grid: { color: css.getPropertyValue("--grid").trim() }, ticks: { color: css.getPropertyValue("--muted").trim() } }
+      }
+    }
+  });
+});
+</script>
+{% endblock %}

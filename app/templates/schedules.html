@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}スケジュール - Eri{% endblock %}
+{% block content %}
+<h1>スケジュール</h1>
+<p class="muted">cron は東京時間(分 時 日 月 曜日)。変更は即反映、再起動不要だよ。</p>
+
+{% for r in rows %}
+<div class="card">
+  <form method="post" action="/schedules/{{ r.id }}/update">
+    <div class="formrow">
+      <span class="badge {{ 'on' if r.enabled }}">{{ "有効" if r.enabled else "無効" }}</span>
+      <input name="name" value="{{ r.name }}" style="width:150px">
+      <span class="badge">{{ r.type }}</span>
+      <input name="cron" value="{{ r.cron }}" style="width:120px">
+      <span class="muted">前回:{{ r.last_run_at | fmt_local }}</span>
+    </div>
+    <div class="formrow">
+      <textarea name="payload" rows="2">{{ r.payload | tojson_cn }}</textarea>
+    </div>
+    <div class="formrow">
+      <button class="small primary">保存</button>
+    </div>
+  </form>
+  <div class="formrow">
+    <form class="inline" method="post" action="/schedules/{{ r.id }}/toggle"><button class="small">{{ "無効にする" if r.enabled else "有効にする" }}</button></form>
+    <form class="inline" method="post" action="/schedules/{{ r.id }}/run"><button class="small">今すぐ1回実行</button></form>
+    <form class="inline" method="post" action="/schedules/{{ r.id }}/delete" onsubmit="return confirm('このタスクを削除する?')"><button class="small">削除</button></form>
+  </div>
+</div>
+{% endfor %}
+
+<div class="card">
+  <h2 style="margin-top:0">新規作成</h2>
+  <form method="post" action="/schedules/create">
+    <div class="formrow">
+      <input name="name" placeholder="名前" required>
+      <select name="type" id="ntype" onchange="fillExample()">
+        <option value="med">med お薬</option>
+        <option value="weight_prompt">weight_prompt 体重記録</option>
+        <option value="reminder">reminder リマインダー</option>
+        <option value="audio">audio オーディオ</option>
+        <option value="report">report 週報</option>
+      </select>
+      <input name="cron" id="ncron" placeholder="30 7 * * *" required>
+      <label><input type="checkbox" name="enabled" value="1" checked> 有効</label>
+    </div>
+    <div class="formrow"><textarea name="payload" id="npayload" rows="2">{}</textarea></div>
+    <div class="formrow"><button class="primary">作成</button></div>
+  </form>
+  <p class="muted">payload の例 —
+    med: <code>{"med_id":1,"resend_every_min":30,"max_resends":3,"grace_min":180}</code>
+    {% if meds %}(お薬:{% for m in meds %}{{ m.id }}={{ m.name }} {% endfor %}){% endif %}<br>
+    audio ホワイトノイズ: <code>{"action":"white_noise","preset":"brown","volume":40,"duration_min":60}</code><br>
+    audio アラーム: <code>{"action":"alarm","fade_in_sec":120,"target_volume":80,"max_min":30}</code><br>
+    report: <code>{"days":7}</code>
+  </p>
+</div>
+
+<script>
+const EXAMPLES = {
+  med: '{"med_id":1}',
+  weight_prompt: '{"text":"体重を測ろう!"}',
+  reminder: '{"title":"ゴミ出し","body":"可燃ゴミ"}',
+  audio: '{"action":"white_noise","preset":"brown","volume":40,"duration_min":60}',
+  report: '{"days":7}'
+};
+function fillExample() {
+  document.getElementById("npayload").value = EXAMPLES[document.getElementById("ntype").value] || "{}";
+}
+fillExample();
+</script>
+{% endblock %}

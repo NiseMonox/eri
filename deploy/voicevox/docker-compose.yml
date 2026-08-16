@@ -1,0 +1,9 @@
+services:
+  voicevox:
+    image: voicevox/voicevox_engine:cpu-latest
+    container_name: voicevox
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:50021:50021"
+    # 必须复刻镜像完整 CMD 再追加参数(entrypoint 是 exec "$@")
+    command: ["gosu", "user", "/opt/voicevox_engine/run", "--host", "0.0.0.0", "--cpu_num_threads", "2"]

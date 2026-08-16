@@ -1,0 +1,23 @@
+[Unit]
+Description=health-hub (FastAPI + APScheduler)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/projects/health-hub
+Environment=TZ=Asia/Tokyo
+# 守卫:确认直通进来的 card1 确实是 <vendor>(万一宿主机 PCI 探测顺序变了,
+# pct 会把 HDMI 那张静默塞进来——宁可服务起不来也别无声地哑掉)
+ExecStartPre=/bin/sh -c 'grep -q <codec> /proc/asound/card1/codec#0'
+# 宿主机重启后混音器回默认静音;宿主机不装 alsa-utils,由本服务自己保证(- 前缀:失败不挡启动)
+# 混音器固定 0dB(100%=不衰减,非增益),日常音量用 mpv 软件音量(schedule payload 的 volume)调
+ExecStartPre=-/usr/bin/amixer -c1 -q sset Master 100% unmute
+ExecStartPre=-/usr/bin/amixer -c1 -q sset Headphone 100% unmute
+SupplementaryGroups=audio
+ExecStart=/projects/health-hub/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8300 --no-access-log
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

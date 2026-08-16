@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}リマインダー - Eri{% endblock %}
+{% block content %}
+<h1>リマインダー</h1>
+<p class="muted">単発リマインダーはここ。毎日繰り返すものは「スケジュール」で reminder タイプを作ってね。</p>
+
+<div class="card">
+  <form method="post" action="/reminders/create">
+    <div class="formrow">
+      <input name="title" placeholder="タイトル" required>
+      <input name="body" placeholder="内容(省略可)">
+      <input name="due_at" type="datetime-local" required>
+      <button class="primary">作成</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <table>
+    <tr><th>時刻</th><th>タイトル</th><th>状態</th><th></th></tr>
+    {% for r in rows %}
+    <tr {% if r.status in ("done","dismissed") %}style="opacity:.5"{% endif %}>
+      <td>{{ r.due_at | fmt_local("%Y-%m-%d %H:%M") }}</td>
+      <td>{{ r.title }}{% if r.body %} <span class="muted">— {{ r.body }}</span>{% endif %}</td>
+      <td><span class="badge">{{ r.status }}</span></td>
+      <td>
+        {% if r.status in ("pending","notified") %}
+        <form class="inline" method="post" action="/reminders/{{ r.id }}/done"><button class="small">完了</button></form>
+        <form class="inline" method="post" action="/reminders/{{ r.id }}/delete"><button class="small">キャンセル</button></form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

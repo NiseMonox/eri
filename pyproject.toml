@@ -1,0 +1,27 @@
+[project]
+name = "health-hub"
+version = "0.1.0"
+description = "家庭服务器全天候健康提醒系统"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "apscheduler>=3.10,<4",
+    "httpx>=0.27",
+    "jinja2>=3.1",
+    "pydantic-settings>=2.4",
+    "matplotlib>=3.9",
+    "croniter>=3",
+    "python-multipart>=0.0.9",
+    "python-telegram-bot>=21",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=0.24"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.uv]
+package = false
