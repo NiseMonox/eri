@@ -76,6 +76,8 @@ def register_internal() -> None:
                       misfire_grace_time=55, **common)
     scheduler.add_job(jobs.daily_backup, CroniterTrigger("30 4 * * *"), id="int:backup",
                       misfire_grace_time=3600, **common)
+    scheduler.add_job(jobs.nas_backup, CroniterTrigger("35 4 * * *"), id="int:nas_backup",
+                      misfire_grace_time=3600, **common)
     scheduler.add_job(jobs.weekly_trim, CroniterTrigger("0 5 * * 1"), id="int:trim",
                       misfire_grace_time=3600, **common)
     scheduler.add_job(jobs.memory_cleanup, CroniterTrigger("0 4 * * *"), id="int:memory_cleanup",

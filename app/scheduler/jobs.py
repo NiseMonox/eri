@@ -217,6 +217,18 @@ async def daily_backup() -> None:
         events.log("backup_error", {"error": str(e)})
 
 
+async def nas_backup() -> None:
+    try:
+        from ..services import nas_backup as nas
+
+        res = await nas.push()
+        if res is None:  # 未配置 NAS:静默跳过
+            return
+        events.log("nas_backup" if res["ok"] else "nas_backup_error", res)
+    except Exception as e:  # noqa: BLE001
+        events.log("nas_backup_error", {"error": str(e)[:200]})
+
+
 async def weekly_trim() -> None:
     try:
         n = events.trim(days=90)
