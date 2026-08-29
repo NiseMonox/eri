@@ -11,16 +11,31 @@ from app.services import body_metrics
 FAKE_NOW = datetime(2026, 8, 29, 1, 0, tzinfo=timezone.utc)  # JST 8/29 10:00
 
 
-def test_ingest_defaults_to_yesterday(fresh_db):
+def test_ingest_defaults_to_today(fresh_db):
+    """晚间自动化上报「今天到目前为止」:date 省略=今天(JST)。"""
     clock.set_override(FAKE_NOW)
     r = activity.ingest({"steps": 8432, "active_kcal": 512.3})
-    assert r["date"] == "2026-08-28"
+    assert r["date"] == "2026-08-29"
     assert r["saved"] == {"steps": 8432, "active_energy": 512.3}
     a = body_metrics.activity_latest()
-    # JST 8/28 0:00 = UTC 8/27 15:00
-    assert a["at"] == "2026-08-27T15:00:00Z"
+    # JST 8/29 0:00 = UTC 8/28 15:00
+    assert a["at"] == "2026-08-28T15:00:00Z"
     assert a["metrics"]["steps"]["value"] == 8432
     assert a["metrics"]["steps"]["unit"] == "歩"
+
+
+def test_trailing_zero_bucket_tolerated(fresh_db):
+    """「開始日が今日である+グループ日」实测在真值后跟一个 0 空桶('80\\n0'):容忍;
+    两个不同非零数(跨天)仍拒绝。"""
+    clock.set_override(FAKE_NOW)
+    r = activity.ingest({"steps": "80\n0", "active_kcal": "52.97200000000001\n0"})
+    assert r["saved"] == {"steps": 80, "active_energy": 52.97}
+    assert r["errors"] == []
+    r2 = activity.ingest({"steps": "0\n0"})          # 全零=真的没走路
+    assert r2["saved"] == {"steps": 0}
+    r3 = activity.ingest({"steps": "23528\n74"})     # 两天的量拼一起,归属不明
+    assert r3["saved"] == {}
+    assert len(r3["errors"]) == 1
 
 
 def test_ingest_upsert_same_day(fresh_db):
