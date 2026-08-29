@@ -81,6 +81,10 @@ def _context() -> str:
         if body_line:
             lines.append(f"最新体成分:{body_line}")
 
+    act = body_metrics.activity_summary_ja()
+    if act:
+        lines.append(f"【活動】(Apple Watch)最新 {act}")
+
     mem = memories.context_block()
     if mem:
         lines.append(mem)

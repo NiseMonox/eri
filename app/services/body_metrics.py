@@ -42,7 +42,11 @@ LABELS_JA = {
     "vascular_age": "血管年齢", "visceral_fat": "内臓脂肪", "basal_metabolic_rate": "基礎代謝",
     "fat_free_mass": "除脂肪体重", "height": "身長", "nerve_health_score": "神経健康スコア",
     "metabolic_age": "代謝年齢",
+    "steps": "歩数", "active_energy": "消費カロリー", "exercise_time": "エクササイズ", "distance": "距離",
 }
+
+# Apple Watch 日次活动指标(快捷指令推送,measured_at=JST 当日 0 点):与体成分分开展示
+ACTIVITY_METRICS = {"steps", "active_energy", "exercise_time", "distance"}
 
 
 def add(metric: str, value: float, measured_at, unit: str = "", source: str = "withings",
@@ -62,13 +66,33 @@ def add(metric: str, value: float, measured_at, unit: str = "", source: str = "w
     return cur.rowcount > 0
 
 
-def latest(limit_metrics: int = 20) -> dict[str, dict]:
-    """每个指标的最新一条:{metric: {value, unit, measured_at}}。"""
+def upsert(metric: str, value: float, measured_at, unit: str = "", source: str = "shortcuts",
+           raw: dict | None = None) -> None:
+    """同 (measured_at, metric, source) 覆盖更新——日次汇总当天多次上报取最后一次。"""
+    import json
+
+    at = clock.iso(measured_at) if not isinstance(measured_at, str) else measured_at
+    conn = db.get_db()
+    conn.execute(
+        "INSERT INTO body_metrics (measured_at, metric, value, unit, source, raw, created_at) "
+        "VALUES (?,?,?,?,?,?,?) "
+        "ON CONFLICT(measured_at, metric, source) DO UPDATE SET value=excluded.value, raw=excluded.raw",
+        (at, metric, float(value), unit, source,
+         json.dumps(raw, ensure_ascii=False) if raw else None, clock.now_iso()),
+    )
+    conn.commit()
+
+
+def latest(limit_metrics: int = 30) -> dict[str, dict]:
+    """每个体成分指标的最新一条(SQL 层排除活动指标,不占 LIMIT 名额):
+    {metric: {value, unit, measured_at}}。活动数据走 activity_latest()。"""
+    ph = ",".join("?" * len(ACTIVITY_METRICS))
     rows = db.get_db().execute(
-        "SELECT metric, value, unit, measured_at FROM body_metrics b "
-        "WHERE measured_at = (SELECT MAX(measured_at) FROM body_metrics WHERE metric=b.metric) "
+        f"SELECT metric, value, unit, measured_at FROM body_metrics b "
+        f"WHERE metric NOT IN ({ph}) "
+        "AND measured_at = (SELECT MAX(measured_at) FROM body_metrics WHERE metric=b.metric) "
         "ORDER BY metric LIMIT ?",
-        (limit_metrics,),
+        (*ACTIVITY_METRICS, limit_metrics),
     ).fetchall()
     return {r["metric"]: dict(r) for r in rows}
 
@@ -81,6 +105,57 @@ def series(metric: str, days: int = 90) -> list[dict]:
         (metric, cutoff),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def activity_latest() -> dict | None:
+    """最近一天有活动数据的日期及全部指标:{"at": UTC ISO, "metrics": {metric: {value, unit}}}。"""
+    ph = ",".join("?" * len(ACTIVITY_METRICS))
+    conn = db.get_db()
+    row = conn.execute(
+        f"SELECT MAX(measured_at) AS at FROM body_metrics WHERE metric IN ({ph})",
+        tuple(ACTIVITY_METRICS),
+    ).fetchone()
+    if not row or not row["at"]:
+        return None
+    rows = conn.execute(
+        f"SELECT metric, value, unit FROM body_metrics WHERE measured_at=? AND metric IN ({ph})",
+        (row["at"], *ACTIVITY_METRICS),
+    ).fetchall()
+    return {"at": row["at"], "metrics": {r["metric"]: dict(r) for r in rows}}
+
+
+def activity_summary_ja() -> str:
+    """最近一天活动的一句话,如「8/28:歩数 8,432歩・消費 512kcal・運動 42分」。"""
+    a = activity_latest()
+    if not a:
+        return ""
+    m, parts = a["metrics"], []
+    if "steps" in m:
+        parts.append(f"歩数 {int(m['steps']['value']):,}歩")
+    if "active_energy" in m:
+        parts.append(f"消費 {int(m['active_energy']['value'])}kcal")
+    if "exercise_time" in m:
+        parts.append(f"運動 {int(m['exercise_time']['value'])}分")
+    if "distance" in m:
+        parts.append(f"{m['distance']['value']:.1f}km")
+    return f"{clock.fmt_local(a['at'], '%-m/%-d')}:{'・'.join(parts)}" if parts else ""
+
+
+def activity_week_ja(days: int = 7) -> str:
+    """周报用:近 N 日平均,如「歩数 平均8,432歩/日(6日分)・消費 平均512kcal/日」。"""
+    cutoff = clock.iso(clock.now_utc() - timedelta(days=days))
+    rows = db.get_db().execute(
+        "SELECT metric, AVG(value) AS avg, COUNT(*) AS n FROM body_metrics "
+        "WHERE metric IN ('steps','active_energy') AND measured_at>=? GROUP BY metric",
+        (cutoff,),
+    ).fetchall()
+    d = {r["metric"]: r for r in rows}
+    parts = []
+    if "steps" in d:
+        parts.append(f"歩数 平均{int(d['steps']['avg']):,}歩/日({d['steps']['n']}日分)")
+    if "active_energy" in d:
+        parts.append(f"消費 平均{int(d['active_energy']['avg'])}kcal/日")
+    return "・".join(parts)
 
 
 def summary_ja() -> str:

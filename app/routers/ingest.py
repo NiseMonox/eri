@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..auth import require_token
-from ..ingest import hae
+from ..ingest import activity, hae
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_token)])
 
@@ -12,6 +12,19 @@ async def ingest_hae(body: dict):
     """Health Auto Export 的 REST 推送目标(App 里把 URL 配成
     http://<server>:8300/api/ingest/hae?token=... )。"""
     return hae.ingest(body)
+
+
+@router.post("/ingest/activity")
+async def ingest_activity(body: dict):
+    """快捷指令的每日活动推送(Apple Watch 歩数/消費カロリー等)。
+    date 省略=昨天(JST);同日重复上报覆盖更新。见 notes.md 5.5 节。"""
+    try:
+        res = activity.ingest(body)
+    except ValueError as e:  # ingest 层的 ValueError 文案本身就是日语
+        raise HTTPException(400, str(e)) from e
+    if not res["saved"]:
+        raise HTTPException(400, "有効な指標がないよ(steps / active_kcal / exercise_min / distance_km)")
+    return res
 
 
 class TextIn(BaseModel):

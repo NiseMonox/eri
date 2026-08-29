@@ -65,6 +65,18 @@
     </table>
     {% endif %}
   </div>
+
+  {% if activity %}
+  <div class="card">
+    <h2 style="margin-top:0">アクティビティ({{ activity.at | fmt_local("%m/%d") }})</h2>
+    <div class="stat">
+      {% if activity.metrics.steps %}{{ "{:,}".format(activity.metrics.steps.value | int) }} <small>歩</small>{% endif %}
+      {% if activity.metrics.active_energy %}<small style="margin-left:8px">🔥 {{ activity.metrics.active_energy.value | int }} kcal</small>{% endif %}
+      {% if activity.metrics.exercise_time %}<small style="margin-left:8px">🏃 {{ activity.metrics.exercise_time.value | int }} 分</small>{% endif %}
+    </div>
+    <canvas id="achart" height="150"></canvas>
+  </div>
+  {% endif %}
 </div>
 
 <div class="card">
@@ -120,5 +132,25 @@ fetch("/api/weights/series?days=30").then(r => r.json()).then(data => {
     }
   });
 });
+if (document.getElementById("achart")) {
+  fetch("/api/body/series?metric=steps&days=14").then(r => r.json()).then(data => {
+    const css = getComputedStyle(document.documentElement);
+    new Chart(document.getElementById("achart"), {
+      type: "bar",
+      data: { labels: data.map(d => d.t.slice(5, 10)),
+              datasets: [{ data: data.map(d => d.v), backgroundColor: css.getPropertyValue("--series").trim(),
+                           borderRadius: 3 }] },
+      options: {
+        plugins: { legend: { display: false }, tooltip: { callbacks: {
+          title: items => data[items[0].dataIndex].t.slice(0, 10),
+          label: item => item.parsed.y.toLocaleString() + " 歩" } } },
+        scales: {
+          x: { grid: { display: false }, ticks: { color: css.getPropertyValue("--muted").trim(), maxTicksLimit: 7 } },
+          y: { grid: { color: css.getPropertyValue("--grid").trim() }, ticks: { color: css.getPropertyValue("--muted").trim() } }
+        }
+      }
+    });
+  });
+}
 </script>
 {% endblock %}

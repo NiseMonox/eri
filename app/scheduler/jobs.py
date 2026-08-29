@@ -125,23 +125,32 @@ async def run_report(payload: dict) -> None:
     from .. import charts
     from ..llm import base as llm
 
+    from ..services import body_metrics
+
     days = int(payload.get("days", 7))
     st = weights.stats(days)
     if st is None:
-        await notify("info", "体重週報", f"直近{days}日の体重記録はないよ")
+        # 没称体重的周,routine/活动汇总照发
+        text = f"直近{days}日の体重記録はないよ"
+        for label, line in (("今週のルーティン", routines.weekly_summary_ja()),
+                            ("今週のアクティビティ", body_metrics.activity_week_ja(days))):
+            if line:
+                text += f"\n{label}:{line}"
+        await notify("info", "体重週報", text)
         return
     text = (
         f"直近{days}日:{st['count']}回記録、平均 {st['avg']}kg、"
         f"範囲 {st['min']}–{st['max']}kg、変化 {st['delta']:+.2f}kg"
     )
-    from ..services import body_metrics
-
     body_line = body_metrics.summary_ja()
     if body_line:
         text += f"\n最新の体組成:{body_line}"
     routine_line = routines.weekly_summary_ja()
     if routine_line:
         text += f"\n今週のルーティン:{routine_line}"
+    act_line = body_metrics.activity_week_ja(days)
+    if act_line:
+        text += f"\n今週のアクティビティ:{act_line}"
     # LLM 文案是锦上添花:失败/关闭时纯统计照发
     narrative = await llm.complete(
         f"体重数据统计:{text}。逐条明细(东京时间):"

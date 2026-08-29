@@ -79,6 +79,7 @@ async def dashboard(request: Request):
         routine_done=[i for i in today_r if i["status"] == "done"],
         stats=weights.stats(7),
         body=body_metrics.latest(),
+        activity=body_metrics.activity_latest(),
         body_labels=body_metrics.LABELS_JA,
         recent=weights.list_weights(limit=5),
         audio=audio_manager.status(),
