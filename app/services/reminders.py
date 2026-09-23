@@ -224,7 +224,10 @@ def mark_notified(rid: int) -> None:
 
 def today_agenda() -> list[dict]:
     """把今天(东京时间)的 med/weight_prompt/reminder 类 schedules 用 croniter 展开,
-    加上当日一次性 reminders。输出 [{"time":"08:00","kind":"med","title":...}, ...] 按时间排序。"""
+    加上当日一次性 reminders。输出 [{"time":"08:00","kind":"med","title":...}, ...] 按时间排序。
+    以完成为准每 N 天的 routine 只在该做的日子列出(当天做完了也照样列着)。"""
+    from . import routines as _rt   # routines 反向依赖本模块,只能函数内导入
+
     start = clock.now_local().replace(hour=0, minute=0, second=0, microsecond=0)
     end = start + timedelta(days=1)
     items: list[dict] = []
@@ -237,22 +240,24 @@ def today_agenda() -> list[dict]:
         payload = json.loads(r["payload"] or "{}")
         title = payload.get("title") or r["name"]
         icon = None
+        rid = None
         kind = "routine" if r["type"] == "med" else r["type"]
         if kind == "routine":
             rid = payload.get("routine_id") or payload.get("med_id")
             if rid:
                 if rid not in routine_cache:
-                    from . import routines as _rt
-
                     routine_cache[rid] = _rt.get(rid) or {}
                 title = routine_cache[rid].get("name") or title
                 icon = routine_cache[rid].get("icon")
+        every = int(payload.get("every_days") or 1) if rid else 1
         # get_next 严格大于基准:退 1 秒让 00:00 整点的任务也进当日清单
         it = croniter(r["cron"], start - timedelta(seconds=1))
         while True:
             t = it.get_next(datetime)
             if t >= end:
                 break
+            if every > 1 and not _rt.interval_due(rid, every, _rt.habit_day(t), planning=True):
+                continue
             items.append({
                 "time": t.strftime("%H:%M"),
                 "when": t.strftime("%Y-%m-%d %H:%M"),   # 快捷指令可直接转日期

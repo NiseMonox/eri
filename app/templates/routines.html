@@ -24,11 +24,12 @@
 
 <div class="card">
   <table>
-    <tr><th>ID</th><th>名前</th><th>カテゴリ</th><th>メモ</th><th></th></tr>
+    <tr><th>ID</th><th>名前</th><th>カテゴリ</th><th>メモ</th><th>リマインド</th><th></th></tr>
     {% for r in routines %}
     <tr {% if not r.active %}style="opacity:.5"{% endif %}>
       <td>{{ r.id }}</td><td>{{ r.icon }} {{ r.name }}</td><td class="muted">{{ categories[r.category].ja if r.category in categories else r.category }}</td>
       <td class="muted">{{ r.detail or "" }}</td>
+      <td class="muted">{% set p = plans.get(r.id) %}{% if p %}{{ p[0] }}{% if p[1] %}<br>次回 {{ p[1].strftime("%m/%d %H:%M") }}{% endif %}{% endif %}</td>
       <td><form class="inline" method="post" action="/routines/{{ r.id }}/toggle"><button class="small">{{ "無効にする" if r.active else "有効にする" }}</button></form></td>
     </tr>
     {% endfor %}
@@ -44,7 +45,7 @@
       <button class="primary">追加</button>
     </div>
   </form>
-  <p class="muted">追加後、「スケジュール」で routine タイプ(payload の routine_id に上の ID)を作ると定時リマインドされるよ。</p>
+  <p class="muted">追加後、「スケジュール」で routine タイプ(payload の routine_id に上の ID)を作ると定時リマインドされるよ。エリに「ストレッチ、1日おきに夜9時に声かけて」みたいに話しかけても設定できるよ。</p>
 </div>
 
 <div class="card">

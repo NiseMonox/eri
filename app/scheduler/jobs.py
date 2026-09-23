@@ -17,7 +17,7 @@ async def run_schedule(schedule_id: int, force: bool = False) -> None:
         return
     payload = json.loads(row["payload"] or "{}")
     try:
-        await dispatch(row["type"], payload, dict(row))
+        await dispatch(row["type"], payload, dict(row), force=force)
         conn = db.get_db()
         conn.execute("UPDATE schedules SET last_run_at=? WHERE id=?", (clock.now_iso(), schedule_id))
         conn.commit()
@@ -37,7 +37,8 @@ async def run_oneshot(type_: str, payload: dict) -> None:
         events.log("oneshot_error", {"type": type_, "error": str(e)})
 
 
-async def dispatch(type_: str, payload: dict, row: dict | None) -> None:
+async def dispatch(type_: str, payload: dict, row: dict | None, force: bool = False) -> None:
+    """force=网页「今すぐ1回実行」:跳过「以完成为准每 N 天」的还没到日子判断。"""
     name = row["name"] if row else payload.get("name", type_)
     schedule_id = row["id"] if row else None
 
@@ -65,6 +66,12 @@ async def dispatch(type_: str, payload: dict, row: dict | None) -> None:
             events.log("routine_inactive_skipped", {"routine_id": routine["id"]},
                        "schedule", schedule_id)
             return
+        every = int(payload.get("every_days") or 1)
+        if every > 1 and not force and row is not None and not routines.interval_due(
+                routine["id"], every, routines.habit_day(clock.now_local())):
+            events.log("routine_not_due", {"routine_id": routine["id"], "every_days": every},
+                       "schedule", schedule_id)
+            return   # 还没到日子;没做完的话明天同一时刻会再判断一次(自然顺延)
         inst = routines.create_instance(routine, schedule_id, payload.get("nag"),
                                         force=(row is None))
         if inst is None:

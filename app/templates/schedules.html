@@ -49,6 +49,7 @@
   </form>
   <p class="muted">payload の例 —
     routine: <code>{"routine_id":1,"nag":{"every_min":30,"max":3,"grace_min":120}}</code>
+    / 2日ごと(完了した日から数える・できなかった日は翌日もまた): <code>{"routine_id":1,"every_days":2}</code>
     {% if routines %}(ルーティン:{% for r in routines %}{{ r.id }}={{ r.icon }}{{ r.name }} {% endfor %}){% endif %}<br>
     audio ホワイトノイズ: <code>{"action":"white_noise","preset":"brown","volume":40,"duration_min":60}</code><br>
     audio アラーム: <code>{"action":"alarm","fade_in_sec":120,"target_volume":80,"max_min":30}</code><br>

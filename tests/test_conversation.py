@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from app import clock, db, events
-from app.services import conversation, intents, reminders, weights
+from app.services import conversation, intents, reminders, routines, weights
 
 T0 = datetime(2026, 8, 15, 1, 0, tzinfo=timezone.utc)   # JST 10:00
 
@@ -283,3 +283,65 @@ async def test_bad_tool_calls_do_not_crash(fresh_db, monkeypatch):
     assert res["reply"] == "ごめん、うまくいかなかった" and res["ok"] is False
     assert [r["ok"] for r in _tool_results(seen[1])] == [False, False, False]
     assert events.recent(kind_prefix="tool_error")
+
+
+async def test_set_recurring_via_conversation(fresh_db, monkeypatch, no_tts):
+    """「拉伸隔一天晚上9点提醒我」→ 用已有 routine 设以完成为准的隔天提醒;
+    提醒前就做了 → record_routine_done,下次顺延;不用了 → stop_recurring。"""
+    clock.set_override(T0)                                                   # 08/15(土)10:00
+    rt = routines.create("ストレッチ", "care", "20分")
+    seen = _fake_llm(monkeypatch,
+                     [("set_recurring", {"routine_id": rt["id"], "times": ["21:00"], "every_days": 2})],
+                     "OK、1日おきに21時ね")
+    await conversation.handle("拉伸隔一天晚上9点提醒我", via="telegram")
+    assert f"routine_id={rt['id']}" in seen[0][0]["content"]                 # 【ルーティン】进了上下文
+    result = _tool_results(seen[1])[0]
+    assert result["ok"] and "2日ごと 21:00" in result["result"] and "08/15(土) 21:00" in result["result"]
+    [s] = routines.schedules_of(rt["id"])
+    assert s["cron"] == "0 21 * * *" and s["payload"]["every_days"] == 2
+    assert len(routines.list_all()) == 1                                     # 没有重复新建
+
+    seen = _fake_llm(monkeypatch, [("record_routine_done", {"routine_id": rt["id"], "done_at": None})],
+                     "えらい!")
+    await conversation.handle("拉伸刚做完了", via="telegram")
+    assert "08/17(月) 21:00" in _tool_results(seen[1])[0]["result"]
+
+    _fake_llm(monkeypatch, [("stop_recurring", {"routine_id": rt["id"]})], "止めたよ")
+    await conversation.handle("拉伸不用再提醒了", via="telegram")
+    assert routines.schedules_of(rt["id"]) == []
+
+
+async def test_set_recurring_new_routine_validates_first(fresh_db, monkeypatch):
+    """新建时参数不对(隔天 + 指定星期)要先拒,不能留下一条没有提醒的空 routine。"""
+    clock.set_override(T0)
+    seen = _fake_llm(monkeypatch,
+                     [("set_recurring", {"name": "ビタミン", "times": ["22:00"], "every_days": 2,
+                                         "weekdays": [1]})],
+                     [("set_recurring", {"name": "ビタミン", "times": ["22:00"], "category": "habit"})],
+                     "毎日22時ね")
+    await conversation.handle("每天晚上十点提醒我吃维生素", via="telegram")
+    first, second = _tool_results(seen[2])
+    assert first["ok"] is False and second["ok"] and "毎日 22:00" in second["result"]
+    [rt] = routines.list_all()
+    assert rt["name"] == "ビタミン" and rt["category"] == "habit"
+
+
+async def test_mark_done_with_past_time(fresh_db, monkeypatch, no_tts):
+    """「昨晚其实做了」:完成时刻记成昨晚,隔天的间隔从昨晚那天算。"""
+    rt = routines.create("ストレッチ", "care")
+    routines.set_schedule(rt["id"], ["21:00"], every_days=2)
+    clock.set_override(T0 - timedelta(hours=13))                            # 08/14 21:00 提醒
+    inst = routines.create_instance(rt, schedule_id=None)
+    reminders.mark_notified(inst["id"])
+    clock.set_override(T0 - timedelta(hours=10, minutes=30))                # 23:30 没理 → 作罢
+    reminders.sweep_nag()
+    assert reminders.get(inst["id"])["status"] == "missed"
+
+    clock.set_override(T0)                                                   # 第二天早上才说
+    _fake_llm(monkeypatch, [("mark_done", {"reminder_id": inst["id"], "done_at": "2026-08-14 22:30"})],
+              "了解!")
+    await conversation.handle("昨晚其实做了拉伸", via="telegram")
+    assert reminders.get(inst["id"])["done_at"] == "2026-08-14T13:30:00Z"
+    assert routines.next_fire(rt["id"]).strftime("%m/%d %H:%M") == "08/16 21:00"
+    with pytest.raises(ValueError):
+        conversation._past_time("2026-08-16 10:00")                          # 将来的时刻不收

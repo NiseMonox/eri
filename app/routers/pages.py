@@ -165,6 +165,8 @@ async def routines_page(request: Request):
                    categories=routines.CATEGORIES,
                    heat=routines.heatmap(weeks), days=days,
                    rates={r["id"]: routines.completion_rate(r["id"], 7) for r in routines.list_all()},
+                   plans={r["id"]: (routines.describe(r["id"]), routines.next_fire(r["id"]))
+                          for r in routines.list_all()},
                    instances=routines.instances(limit=30))
 
 

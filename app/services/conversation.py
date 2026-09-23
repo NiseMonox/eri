@@ -21,17 +21,18 @@ SYSTEM = """你是「艾莉」(エリ),用户家里的 AI 助手兼健康秘书:
 - 只依据【上下文】和工具返回的结果说话:不编数据,没执行成功的事不能说做了
 
 【工具】
-- 话里有能用工具办的事(记体重、建提醒、推迟/改期、完成、取消、忘掉记忆、看今日待办、体重曲线、周报)就直接调用,不用先征求同意;一句话里有几件事就调几个
+- 话里有能用工具办的事(记体重、建提醒、设重复提醒、推迟/改期、完成、取消、忘掉记忆、看今日待办、体重曲线、周报)就直接调用,不用先征求同意;一句话里有几件事就调几个
 - 纯聊天、问身体数据(用【身体数据】的数字答)、问「你记得我什么」(用【长期记忆】答)时不调工具,直接回复
-- reminder_id 只能取自【开放事项】或【今后的提醒】,memory_id 只能取自【长期记忆】;对不上号时别猜,问清楚
+- reminder_id 只能取自【开放事项】或【今后的提醒】,routine_id 只能取自【ルーティン】,memory_id 只能取自【长期记忆】;对不上号时别猜,问清楚
 - 时间一律东京时间 yyyy-MM-dd HH:mm,按【当前时间】换算:「下午」=14:00、「晚上」=20:00、「待会/过会」=+1 小时;只说了钟点而今天这个钟点已过,就当明天
-- 只能建一次性提醒;要每天/每周重复的,请用户在「Webのスケジュールページ(/schedules)」设置
+- 一次性的事用 create_reminder;重复的事(每天吃药、隔一天做拉伸、每周一倒垃圾)用 set_recurring——【ルーティン】里已有的传它的 routine_id 修改,别重复新建;没说几点提醒就先问
+- 用户说做完了:【开放事项】里有对应项用 mark_done,没有(比如提醒之前就做了)用 record_routine_done;说的是过去的事(「昨晚其实做了」)就把实际时刻填进 done_at
 - 工具返回 ok=false 时照实说明原因,需要的话问清楚
 - 历史消息里用户话前面的 [MM/DD HH:MM] 是发送时间;你的回复不要带这种时间戳"""
 
 SIRI_NOTE = "\n\n这条消息来自 Siri 语音,回复会被朗读:不要用 emoji、列表和符号,说得口语一点。"
 # 提示词管不住模型加 emoji,Siri 回复在代码里兜底删掉(快捷指令会把 😌 念成「ほっとした顔」)
-RE_EMOJI = re.compile("[\U0001F000-\U0001FAFF☀-➿️‍]")
+RE_EMOJI = re.compile("[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U0000FE0F\U0000200D]")
 FALLBACK_REPLY = "ごめん、いま頭がうまく回らないみたい。「62.5」で体重記録、「薬飲んだ」で服薬確認はできるよ"
 MAX_ROUNDS = 4          # 一句话最多几轮「调工具 → 看结果」
 
@@ -44,6 +45,9 @@ def _tool(name: str, desc: str, props: dict | None = None, required: list | None
 
 _WHEN = {"type": "string", "description": "东京时间 yyyy-MM-dd HH:mm,必须是将来"}
 _RID = {"type": "integer", "description": "【开放事项】或【今后的提醒】里的 id"}
+_ROUTINE = {"type": "integer", "description": "【ルーティン】里的 routine_id"}
+_PAST = {"type": ["string", "null"],
+         "description": "实际做完的时刻 yyyy-MM-dd HH:mm(「昨晚其实做了」);就是刚才则 null"}
 TOOLS = [
     _tool("record_weight", "记录体重(用户报了体重数字时)",
           {"weight_kg": {"type": "number", "description": "公斤"},
@@ -55,8 +59,8 @@ TOOLS = [
           ["title", "due_at"]),
     _tool("snooze", "把某项推迟/改期到指定时刻(「下午再去」「改到 4 点」)",
           {"reminder_id": _RID, "until": _WHEN}, ["reminder_id", "until"]),
-    _tool("mark_done", "把某项标记为完成(「做完了」「薬飲んだ」「已经去过了」)",
-          {"reminder_id": _RID}, ["reminder_id"]),
+    _tool("mark_done", "把【开放事项】里的某项标记为完成(「做完了」「薬飲んだ」「已经去过了」)",
+          {"reminder_id": _RID, "done_at": _PAST}, ["reminder_id"]),
     _tool("dismiss", "取消某项,不再催(「今天不去了」「算了取消吧」)",
           {"reminder_id": _RID}, ["reminder_id"]),
     _tool("forget_memory", "忘掉一条长期记忆(「那个不用记了」)",
@@ -65,11 +69,30 @@ TOOLS = [
     _tool("weight_chart", "生成体重曲线图(图片会附在回复里)",
           {"days": {"type": "integer", "description": "天数 7-365,默认 30"}}),
     _tool("weekly_report", "生成体重周报并推送给用户"),
+    _tool("set_recurring",
+          "设定/修改重复提醒(到点推送+播报,没回应会追催)。every_days=1 每天;「隔一天」=2、「每三天」=3,"
+          "以完成为准——那天没做完第二天接着提醒,做完了才隔开;weekdays=只在每周这几天(不能和 every_days≥2 同用)。"
+          "传 routine_id 会替换它原来的时间表",
+          {"routine_id": {"type": ["integer", "null"], "description": "【ルーティン】里已有的 id;新建填 null"},
+           "name": {"type": "string", "description": "新建时:要做的事,简短"},
+           "times": {"type": "array", "items": {"type": "string"}, "description": "提醒时刻 HH:MM,可多个"},
+           "every_days": {"type": "integer", "description": "每 N 天,默认 1"},
+           "weekdays": {"type": "array", "items": {"type": "integer"}, "description": "1=周一 … 7=周日"},
+           "category": {"type": "string", "enum": list(routines.CATEGORIES), "description": "新建时的分类"},
+           "detail": {"type": "string", "description": "补充说明,如「20分」「10mg」"}},
+          ["times"]),
+    _tool("stop_recurring", "停掉某个 routine 的重复提醒(「不用再提醒我吃维生素了」)",
+          {"routine_id": _ROUTINE}, ["routine_id"]),
+    _tool("record_routine_done",
+          "记录某个 routine 做完了——【开放事项】里没有对应项时用(比如提醒之前就做了);以完成为准的间隔从这次重新算",
+          {"routine_id": _ROUTINE, "done_at": _PAST}, ["routine_id"]),
 ]
 # 工具名 → _execute 的动作名
 TOOL_ACTIONS = {"record_weight": "weight", "create_reminder": "reminder", "snooze": "snooze",
                 "mark_done": "done", "dismiss": "dismiss", "forget_memory": "forget",
-                "show_today": "today", "weight_chart": "chart", "weekly_report": "report"}
+                "show_today": "today", "weight_chart": "chart", "weekly_report": "report",
+                "set_recurring": "recurring", "stop_recurring": "stop_recurring",
+                "record_routine_done": "routine_record"}
 
 STANDARD_INTENTS = {"weight", "reminder", "today", "chart", "report"}
 
@@ -122,6 +145,16 @@ def _context() -> str:
         lines.append("【今后的提醒】")
         for r in upcoming:
             lines.append(f"- id={r['id']}「{r['title']}」 {clock.fmt_local(r['due_at'])}")
+
+    rts = routines.list_all()
+    if rts:
+        lines.append("【ルーティン】")
+        for rt in rts:
+            nxt = routines.next_fire(rt["id"])
+            detail = f"({rt['detail']})" if rt.get("detail") else ""
+            lines.append(f"- routine_id={rt['id']} {rt['icon']}「{rt['name']}」{detail}:{routines.describe(rt['id'])};"
+                         f"上次完成 {clock.fmt_local(routines.last_done_at(rt['id']), '%m/%d %H:%M')};"
+                         f"下次提醒 {nxt.strftime('%m/%d %H:%M') if nxt else '—'}")
 
     from . import body_metrics, weights
 
@@ -278,9 +311,13 @@ async def _execute(action: dict, user_text: str, via: str) -> dict:
         return _r(True, f"OK、「{row['title']}」は {when} にまた声かけるね")
 
     if kind == "done":
+        try:
+            at = _past_time(action.get("done_at"))
+        except ValueError as e:
+            return _r(False, str(e))
         row = reminders.get(rid)
         if row and row.get("kind") == "routine":
-            row = routines.complete(rid, via=via)
+            row = routines.complete(rid, via=via, done_at=at)
         else:
             row = reminders.set_status(rid, "done")
         if row is None or row["status"] != "done":
@@ -312,6 +349,29 @@ async def _execute(action: dict, user_text: str, via: str) -> dict:
         memories.deactivate(mid, reason="user")
         return _r(True, f"忘れたよ:「{m['text']}」")
 
+    if kind == "recurring":
+        return _set_recurring(action)
+
+    if kind in ("stop_recurring", "routine_record"):
+        try:
+            routine = routines.get(int(action["routine_id"]))
+        except (KeyError, TypeError, ValueError):
+            routine = None
+        if routine is None or not routine["active"]:
+            return _r(False, "どのルーティンのことか分からなかったよ")
+        if kind == "stop_recurring":
+            n = routines.stop_schedules(routine["id"], via=via)
+            return _r(True, f"🔕 「{routine['name']}」のリマインドを止めたよ" if n
+                      else f"「{routine['name']}」はもともとリマインドしてないよ")
+        try:
+            row = routines.record_done(routine["id"], via=via, done_at=_past_time(action.get("done_at")))
+        except ValueError as e:
+            return _r(False, str(e))
+        from ..audio import tts
+
+        await tts.announce_done(row["title"])
+        return _r(True, f"✅ 「{routine['name']}」完了を記録したよ" + _next_line(routine["id"]))
+
     if kind in STANDARD_INTENTS:
         payload = dict(action)
         payload["intent"] = kind
@@ -322,3 +382,47 @@ async def _execute(action: dict, user_text: str, via: str) -> dict:
 
 def _r(ok: bool, reply: str) -> dict:
     return {"ok": ok, "reply": reply, "photo": None}
+
+
+def _past_time(v) -> str | None:
+    """「昨晚其实做了」的实际完成时刻 → UTC ISO;空=现在。读不懂或在将来 → ValueError(日语说明)。"""
+    if not v:
+        return None
+    try:
+        at = clock.parse_flexible_jst(str(v))
+    except ValueError:
+        raise ValueError("いつやったのか読み取れなかったよ") from None
+    if clock.parse_iso(at) > clock.now_utc() + timedelta(minutes=5):
+        raise ValueError("その時刻はまだ来てないよ")
+    return at
+
+
+def _set_recurring(action: dict) -> dict:
+    times, every, weekdays = action.get("times") or [], action.get("every_days") or 1, action.get("weekdays")
+    try:
+        routines.build_crons(times, every, weekdays)   # 先校验再建 routine:参数不对别留下没提醒的空 routine
+        if action.get("routine_id") is not None:
+            routine = routines.get(int(action["routine_id"]))
+            if routine is None:
+                return _r(False, "そのルーティンは見つからなかったよ")
+        else:
+            name = str(action.get("name") or "").strip()
+            if not name:
+                return _r(False, "何をリマインドするのか分からなかったよ")
+            routine = routines.find_by_name(name) or routines.create(
+                name, str(action.get("category") or "other"), str(action.get("detail") or ""))
+        changes = {"active": 1} | ({"detail": str(action["detail"])} if action.get("detail") else {})
+        routine = routines.update(routine["id"], **changes)
+        routines.set_schedule(routine["id"], times, every, weekdays)
+    except (TypeError, ValueError) as e:
+        return _r(False, f"設定できなかったよ:{e}")
+    return _r(True, f"🔁 「{routine['name']}」を {routines.describe(routine['id'])} で設定したよ"
+                    + _next_line(routine["id"]))
+
+
+def _next_line(routine_id: int) -> str:
+    t = routines.next_fire(routine_id)
+    if t is None:
+        return ""
+    wd = routines.WEEKDAY_JA[int(t.strftime("%w"))]
+    return f"。次は {t.strftime('%m/%d')}({wd}) {t.strftime('%H:%M')} に声かけるね"
