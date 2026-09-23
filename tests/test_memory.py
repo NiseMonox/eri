@@ -99,7 +99,7 @@ async def test_actions_logged_and_shown_in_history(fresh_db, monkeypatch):
     seen = _fake_llm(monkeypatch, "どういたしまして")
     await conversation.handle("ありがとう", via="telegram")
     past = [m for m in seen[0] if m["role"] == "assistant"][0]["content"]
-    assert past.startswith("〔実行済み: ⚖️ 70.2kg 記録したよ") and past.endswith("記録したよ")
+    assert past.startswith("〔実行済み: 70.2kg 記録したよ") and past.endswith("記録したよ")
 
 
 async def test_remember_dedupes_rejects_relative_dates_and_caps_core(fresh_db, monkeypatch, fake_embedder):

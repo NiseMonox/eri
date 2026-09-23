@@ -10,7 +10,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import timedelta
 
-from .. import clock, db, events, store
+from .. import clock, db, emoji, events, store
 from ..bot import parser
 from ..llm import base as llm
 from ..llm import embed
@@ -25,6 +25,7 @@ SYSTEM = """你是「艾莉」(エリ),用户家里的 AI 助手兼健康秘书:
 
 【说话方式】
 - 回复一律日语,像朋友一样轻松(だよ/ね口吻),一般 1-3 句,不说教
+- 不用 emoji(表情符号,以及闪光、音符、星星之类的装饰符号),语气靠措辞表达
 - 用户说中文或日语都要理解,但别把中文词原样混进日语回复(如「健身」→「ジム/運動」)
 - 纯文本:Telegram 不渲染 Markdown,不要用 **粗体**、# 标题;要列举就用「・」开头的短行
 - 只依据上面这些信息和工具返回的结果说话:不编数据,没执行成功的事不能说做了;记忆和对话记录冲突时以对话记录为准
@@ -39,10 +40,8 @@ SYSTEM = """你是「艾莉」(エリ),用户家里的 AI 助手兼健康秘书:
 - 用户明确说「记住…」才用 remember(日常对话不用,每天夜里会自动整理进记忆);问到过去的事而上面找不到时才用 search_memory(query 用日语;问某一天就给日期)
 - 工具返回 ok=false 时照实说明原因,需要的话问清楚"""
 
-SIRI_NOTE = "\n\n这条消息来自 Siri 语音,回复会被朗读:不要用 emoji、列表和符号,说得口语一点。"
-# 提示词管不住模型加 emoji,Siri 回复在代码里兜底删掉(快捷指令会把 😌 念成「ほっとした顔」)
+SIRI_NOTE = "\n\n这条消息来自 Siri 语音,回复会被朗读:不要用列表和符号,说得口语一点。"
 RE_ACTION_TAG = re.compile(r"〔実行済み[^〕]*〕\s*")   # 模型偶尔学着历史写标注,回复里删掉
-RE_EMOJI = re.compile("[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U0000FE0F\U0000200D]")
 FALLBACK_REPLY = "ごめん、いま頭がうまく回らないみたい。「62.5」で体重記録、「薬飲んだ」で服薬確認はできるよ"
 MAX_ROUNDS = 4          # 一句话最多几轮「调工具 → 看结果」
 
@@ -191,7 +190,7 @@ def _context() -> str:
         for rt in rts:
             nxt = routines.next_fire(rt["id"])
             detail = f"({rt['detail']})" if rt.get("detail") else ""
-            lines.append(f"- routine_id={rt['id']} {rt['icon']}「{rt['name']}」{detail}:{routines.describe(rt['id'])};"
+            lines.append(f"- routine_id={rt['id']}「{rt['name']}」{detail}:{routines.describe(rt['id'])};"
                          f"上次完成 {clock.fmt_local(routines.last_done_at(rt['id']), '%m/%d %H:%M')};"
                          f"下次提醒 {nxt.strftime('%m/%d %H:%M') if nxt else '—'}")
 
@@ -265,8 +264,8 @@ async def handle(text: str, via: str) -> dict:
         if fast:
             _note_action(ctx, fast.get("intent", "?"), res)
     res["reply"] = RE_ACTION_TAG.sub("", res["reply"]).strip() or res["reply"]
-    if via == "siri":
-        res["reply"] = RE_EMOJI.sub("", res["reply"]).strip()
+    # 提示词管不住模型偶尔加 emoji:所有渠道都在这里兜底删掉(Siri 还会把表情念成「ほっとした顔」)
+    res["reply"] = emoji.strip(res["reply"]) or "了解だよ"
     _log(via, "user", text, ts=arrived)
     _log(via, "assistant", res["reply"], actions=ctx.actions)
     return res
@@ -317,6 +316,8 @@ async def _run_tool(call: dict, user_text: str, via: str, ctx: TurnCtx) -> dict:
         args = None
     if kind is None or not isinstance(args, dict):
         return _r(False, f"ツールの呼び出しが不正だよ({fn.get('name')})")
+    # LLM 起的标题/名字/记忆原文也不留 emoji:它们会进 DB、通知、iPhone 同步和网页
+    args = {k: emoji.strip(v) if isinstance(v, str) else v for k, v in args.items()}
     try:
         res = await _execute({**args, "action": kind}, user_text, via, ctx)
     except Exception as e:  # noqa: BLE001  一个工具出错不拖垮整轮对话,错误回喂给 LLM
@@ -346,12 +347,12 @@ async def _execute(action: dict, user_text: str, via: str, ctx: TurnCtx | None =
         cat = "med" if kind == "med_confirm" else None
         inst = routines.latest_open(cat)
         if inst is None:
-            return _r(True, "いま確認待ちのお薬はないよ 👍" if cat == "med" else "いま確認待ちのルーティンはないよ 👍")
+            return _r(True, "いま確認待ちのお薬はないよ" if cat == "med" else "いま確認待ちのルーティンはないよ")
         row = routines.complete(inst["id"], via=via)
         from ..audio import tts
 
         await tts.announce_done(row["title"])
-        return _r(True, f"✅ {row['title']}、完了だよ({clock.fmt_local(row['done_at'], '%H:%M')})")
+        return _r(True, f"{row['title']}、完了だよ({clock.fmt_local(row['done_at'], '%H:%M')})")
 
     # LLM 给的 id 一律先对【开放事项】/【今后的提醒】/【长期记忆】验明正身
     if kind in ("snooze", "done", "dismiss"):
@@ -395,7 +396,7 @@ async def _execute(action: dict, user_text: str, via: str, ctx: TurnCtx | None =
         from ..audio import tts
 
         await tts.announce_done(row["title"])
-        return _r(True, f"記録したよ:「{row['title']}」完了 ✅")
+        return _r(True, f"記録したよ:「{row['title']}」完了")
 
     if kind == "dismiss":
         row = reminders.get(rid)
@@ -436,7 +437,7 @@ async def _execute(action: dict, user_text: str, via: str, ctx: TurnCtx | None =
             return _r(False, "どのルーティンのことか分からなかったよ")
         if kind == "stop_recurring":
             n = routines.stop_schedules(routine["id"], via=via)
-            return _r(True, f"🔕 「{routine['name']}」のリマインドを止めたよ" if n
+            return _r(True, f"「{routine['name']}」のリマインドを止めたよ" if n
                       else f"「{routine['name']}」はもともとリマインドしてないよ")
         try:
             row = routines.record_done(routine["id"], via=via, done_at=_past_time(action.get("done_at")))
@@ -445,7 +446,7 @@ async def _execute(action: dict, user_text: str, via: str, ctx: TurnCtx | None =
         from ..audio import tts
 
         await tts.announce_done(row["title"])
-        return _r(True, f"✅ 「{routine['name']}」完了を記録したよ" + _next_line(routine["id"]))
+        return _r(True, f"「{routine['name']}」完了を記録したよ" + _next_line(routine["id"]))
 
     if kind in STANDARD_INTENTS:
         payload = dict(action)
@@ -489,7 +490,7 @@ async def _remember(action: dict, ctx: TurnCtx | None) -> dict:
     if ctx is not None:
         ctx.visible.add(row["id"])
         ctx.remembered += 1
-    return _r(True, f"🧠 覚えたよ(#{row['id']}){note}")
+    return _r(True, f"覚えたよ(#{row['id']}){note}")
 
 
 async def _search_memory(action: dict, ctx: TurnCtx | None) -> dict:
@@ -540,7 +541,7 @@ def _set_recurring(action: dict) -> dict:
         routines.set_schedule(routine["id"], times, every, weekdays)
     except (TypeError, ValueError) as e:
         return _r(False, f"設定できなかったよ:{e}")
-    return _r(True, f"🔁 「{routine['name']}」を {routines.describe(routine['id'])} で設定したよ"
+    return _r(True, f"「{routine['name']}」を {routines.describe(routine['id'])} で設定したよ"
                     + _next_line(routine["id"]))
 
 

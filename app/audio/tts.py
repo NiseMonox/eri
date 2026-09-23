@@ -10,7 +10,7 @@ from pathlib import Path
 
 import httpx
 
-from .. import clock, events, store
+from .. import clock, emoji, events, store
 from ..config import settings
 
 CACHE_DIR = settings.db_path.parent / "tts-cache"
@@ -123,7 +123,7 @@ async def announce(text: str, *, force: bool = False) -> bool:
         return False
     async with _announce_lock:
         try:
-            ja = await ensure_ja(text)
+            ja = emoji.strip(await ensure_ja(emoji.strip(text)))   # 引擎会把 emoji 念成名字
             path = await synth(ja)
         except Exception as e:  # noqa: BLE001
             events.log("tts_error", {"error": str(e)[:200], "text": text[:60]})

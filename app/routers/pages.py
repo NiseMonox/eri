@@ -9,8 +9,9 @@ from urllib.parse import quote
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
+from markupsafe import Markup
 
-from .. import clock, events, store
+from .. import clock, emoji, events, store
 from ..audio.manager import audio_manager
 from ..auth import COOKIE_NAME, require_page_login
 from ..config import settings
@@ -23,6 +24,18 @@ from ..services import schedules as sched_svc
 router = APIRouter()
 STATIC = Path(__file__).parent.parent / "static"
 templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
+
+
+def _no_emoji(v):
+    """所有 {{ }} 输出都过一遍:库里的例行名、记忆、事件日志即使带 emoji,网页上也不显示。"""
+    if isinstance(v, str):
+        out = emoji.strip(v)
+        if out is not v:
+            return Markup(out) if isinstance(v, Markup) else out
+    return v
+
+
+templates.env.finalize = _no_emoji
 templates.env.filters["fmt_local"] = clock.fmt_local
 templates.env.filters["tojson_cn"] = lambda v: json.dumps(v, ensure_ascii=False)
 # ?v=<mtime>:静态文件一改,浏览器就换新的(否则会按启发式缓存拿旧 CSS 配新模板)

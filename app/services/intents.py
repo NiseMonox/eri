@@ -1,6 +1,6 @@
 """标准意图执行层(体重/新建提醒/今日/图表/周报)。routine 确认与对话动作在 conversation 里。"""
 
-from .. import clock
+from .. import clock, emoji
 from . import reminders, weights
 
 
@@ -23,7 +23,7 @@ async def execute(intent: dict, *, via: str) -> dict:
             return {"ok": False, "reply": f"その時刻({t})はもう記録があるよ。二重登録はしなかったよ", "photo": None}
         st = weights.stats(7)
         extra = f"、直近7日で {st['delta']:+.2f}kg" if st and st["count"] > 1 else ""
-        return {"ok": True, "reply": f"⚖️ {r['row']['weight_kg']}kg 記録したよ({t}){extra}",
+        return {"ok": True, "reply": f"{r['row']['weight_kg']}kg 記録したよ({t}){extra}",
                 "photo": None}
 
     if kind == "reminder":
@@ -41,7 +41,7 @@ async def execute(intent: dict, *, via: str) -> dict:
                     "photo": None}
         r = reminders.create(title, str(intent.get("body", "")), due)
         return {"ok": True,
-                "reply": f"🔔 リマインダー作ったよ:{r['title']} @ "
+                "reply": f"リマインダー作ったよ:{r['title']} @ "
                          f"{clock.fmt_local(r['due_at'], '%m-%d %H:%M')}",
                 "photo": None}
 
@@ -67,7 +67,4 @@ def today_text() -> str:
     agenda = reminders.today_agenda()
     if not agenda:
         return "今日の予定はないよ"
-    icon = {"routine": "✅", "med": "💊", "weight_prompt": "⚖️", "reminder": "🔔"}
-    return "今日の予定:\n" + "\n".join(
-        f"{a['time']} {a.get('icon') or icon.get(a['kind'], '•')} {a['title']}" for a in agenda
-    )
+    return emoji.strip("今日の予定:\n" + "\n".join(f"・{a['time']} {a['title']}" for a in agenda))

@@ -109,7 +109,7 @@ async def dispatch(type_: str, payload: dict, row: dict | None, force: bool = Fa
 async def _send_routine_notice(inst: dict, routine: dict, nth: int = 0) -> None:
     cat = routines.CATEGORIES.get(routine.get("category", "other"), routines.CATEGORIES["other"])
     label = "お薬の時間" if routine.get("category") == "med" else f"{cat['ja']}の時間"
-    title = f"{cat['icon']} {label}:{routine['name']}" + (f"({routine['detail']})" if routine.get("detail") else "")
+    title = f"{label}:{routine['name']}" + (f"({routine['detail']})" if routine.get("detail") else "")
     if nth:
         title = f"[{nth}回目] " + title
     confirm_url = f"{settings.base_url}/c/r/{inst['token']}"
@@ -118,7 +118,7 @@ async def _send_routine_notice(inst: dict, routine: dict, nth: int = 0) -> None:
 
     buttons = None
     if bot_runner.configured():
-        done_label = "✅ 飲んだよ" if routine.get("category") == "med" else "✅ やったよ"
+        done_label = "飲んだよ" if routine.get("category") == "med" else "やったよ"
         buttons = [(done_label, f"rdone:{inst['id']}"), ("今回はスキップ", f"rskip:{inst['id']}")]
     await notify(
         cat["notify_profile"], title, "通知タップで完了にできるよ",

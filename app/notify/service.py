@@ -1,6 +1,6 @@
 """通知统一入口。三档 profile 固化 Bark 参数;失败 fail-soft(写 event_log,不抛给调度层)。"""
 
-from .. import events
+from .. import emoji, events
 from . import bark, telegram
 
 PROFILES: dict[str, dict] = {
@@ -22,6 +22,10 @@ async def notify(
     ref_type: str | None = None,
     ref_id: int | None = None,
 ) -> dict:
+    # 标题里的例行名/提醒名、周报的 LLM 文案都可能带 emoji:发出去之前统一删
+    title, body = emoji.strip(title), emoji.strip(body)
+    if tg_buttons:
+        tg_buttons = [(emoji.strip(label), data) for label, data in tg_buttons]
     bark_kwargs = dict(PROFILES.get(profile, PROFILES["info"]))
     sent = {"bark": False, "telegram": False}
 

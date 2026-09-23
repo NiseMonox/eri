@@ -12,12 +12,13 @@ from croniter import croniter
 from .. import clock, db, events
 from . import reminders
 
+# 不带图标:对外文字一律不用 emoji(routines.icon 列是旧数据,读出来也丢掉)
 CATEGORIES = {
-    "med": {"icon": "💊", "ja": "お薬", "notify_profile": "med"},
-    "exercise": {"icon": "🏋️", "ja": "運動", "notify_profile": "info"},
-    "care": {"icon": "🧴", "ja": "ケア", "notify_profile": "info"},
-    "habit": {"icon": "✅", "ja": "習慣", "notify_profile": "info"},
-    "other": {"icon": "📌", "ja": "その他", "notify_profile": "info"},
+    "med": {"ja": "お薬", "notify_profile": "med"},
+    "exercise": {"ja": "運動", "notify_profile": "info"},
+    "care": {"ja": "ケア", "notify_profile": "info"},
+    "habit": {"ja": "習慣", "notify_profile": "info"},
+    "other": {"ja": "その他", "notify_profile": "info"},
 }
 
 
@@ -28,9 +29,8 @@ def create(name: str, category: str = "other", detail: str = "", nag: dict | Non
         category = "other"
     conn = db.get_db()
     cur = conn.execute(
-        "INSERT INTO routines (name, category, detail, icon, nag, created_at) VALUES (?,?,?,?,?,?)",
-        (name, category, detail, CATEGORIES[category]["icon"],
-         json.dumps(nag) if nag else None, clock.now_iso()),
+        "INSERT INTO routines (name, category, detail, nag, created_at) VALUES (?,?,?,?,?)",
+        (name, category, detail, json.dumps(nag) if nag else None, clock.now_iso()),
     )
     conn.commit()
     return get(cur.lastrowid)
@@ -44,8 +44,7 @@ def get(rid: int) -> dict | None:
 def _row(row) -> dict:
     d = dict(row)
     d["nag"] = json.loads(d["nag"]) if d.get("nag") else None
-    if not d.get("icon"):
-        d["icon"] = CATEGORIES.get(d.get("category", "other"), CATEGORIES["other"])["icon"]
+    d.pop("icon", None)
     return d
 
 
@@ -59,8 +58,6 @@ def update(rid: int, **fields) -> dict | None:
                if k in ("name", "category", "detail", "active", "nag")}
     if "nag" in allowed:
         allowed["nag"] = json.dumps(allowed["nag"]) if allowed["nag"] else None
-    if "category" in allowed:
-        allowed["icon"] = CATEGORIES.get(allowed["category"], CATEGORIES["other"])["icon"]
     if allowed:
         conn = db.get_db()
         sets = ", ".join(f"{k}=?" for k in allowed)
@@ -155,7 +152,7 @@ def latest_open(category: str | None = None) -> dict | None:
 
 
 def instances(routine_id: int | None = None, status: str | None = None, limit: int = 100) -> list[dict]:
-    q = ("SELECT r.*, t.name AS routine_name, t.category, COALESCE(t.icon,'📌') AS icon "
+    q = ("SELECT r.*, t.name AS routine_name, t.category "
          "FROM reminders r JOIN routines t ON t.id=r.routine_id WHERE r.kind='routine'")
     args: list = []
     if routine_id:
@@ -172,7 +169,7 @@ def instances(routine_id: int | None = None, status: str | None = None, limit: i
 def today_instances() -> list[dict]:
     start = clock.now_local().replace(hour=0, minute=0, second=0, microsecond=0)
     rows = db.get_db().execute(
-        "SELECT r.*, t.name AS routine_name, t.category, COALESCE(t.icon,'📌') AS icon "
+        "SELECT r.*, t.name AS routine_name, t.category "
         "FROM reminders r JOIN routines t ON t.id=r.routine_id WHERE r.kind='routine' AND r.due_at>=? "
         "ORDER BY r.due_at",
         (clock.iso(start),),
@@ -218,7 +215,7 @@ def weekly_summary_ja() -> str:
     for r in list_all():
         c = completion_rate(r["id"], 7)
         if c["total"]:
-            parts.append(f"{r['icon']}{r['name']} {c['done']}/{c['total']}")
+            parts.append(f"{r['name']} {c['done']}/{c['total']}")
     return "、".join(parts)
 
 

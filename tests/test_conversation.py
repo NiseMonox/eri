@@ -156,6 +156,21 @@ def no_tts(monkeypatch):
     monkeypatch.setattr(tts, "announce_done", quiet)
 
 
+async def test_emoji_stripped_on_every_channel(fresh_db, monkeypatch, no_tts):
+    """不只 Siri:Telegram 的回复也不带 emoji;LLM 起的提醒标题进库前就去掉(会进通知和 iPhone 同步)。"""
+    clock.set_override(T0)
+    _fake_llm(monkeypatch,
+              [("create_reminder", {"title": "🎂 ケーキ受け取り", "due_at": "2026-08-15 18:00"})],
+              "了解だよ✨ 18時に声かけるね👍")
+    res = await conversation.handle("夕方6時にケーキ取りに行くって教えて", via="telegram")
+    assert res["reply"] == "了解だよ18時に声かけるね"
+    rows = db.get_db().execute("SELECT title FROM reminders WHERE kind='reminder'").fetchall()
+    assert [r["title"] for r in rows] == ["ケーキ受け取り"]
+
+    _fake_llm(monkeypatch, "👍")                      # 只有 emoji 的回复:删完不能是空消息
+    assert (await conversation.handle("ありがとう", via="telegram"))["reply"] == "了解だよ"
+
+
 async def test_conversation_snooze_and_done(fresh_db, monkeypatch, no_tts):
     clock.set_override(T0)
     inst = reminders.create_instance("去健身房", schedule_id=7)
@@ -165,7 +180,7 @@ async def test_conversation_snooze_and_done(fresh_db, monkeypatch, no_tts):
                      [("snooze", {"reminder_id": inst["id"], "until": "2026-08-15 14:00"})],
                      "OK、14時にまた声かけるね👍")
     res = await conversation.handle("手头有点事,下午再去", via="siri")
-    assert res["ok"] and res["reply"] == "OK、14時にまた声かけるね"     # LLM 写的回复;Siri 去掉 emoji
+    assert res["ok"] and res["reply"] == "OK、14時にまた声かけるね"     # LLM 写的回复;emoji 去掉
     assert "去健身房" in seen[0][-1]["content"]                             # 开放事项在本轮消息的【当前状态】里
     assert "14:00" in _tool_results(seen[1])[0]["result"]                 # 执行结果回喂给 LLM
     assert reminders.get(inst["id"])["status"] == "pending"

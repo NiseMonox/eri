@@ -239,7 +239,6 @@ def today_agenda() -> list[dict]:
     for r in rows:
         payload = json.loads(r["payload"] or "{}")
         title = payload.get("title") or r["name"]
-        icon = None
         rid = None
         kind = "routine" if r["type"] == "med" else r["type"]
         if kind == "routine":
@@ -248,7 +247,6 @@ def today_agenda() -> list[dict]:
                 if rid not in routine_cache:
                     routine_cache[rid] = _rt.get(rid) or {}
                 title = routine_cache[rid].get("name") or title
-                icon = routine_cache[rid].get("icon")
         every = int(payload.get("every_days") or 1) if rid else 1
         # get_next 严格大于基准:退 1 秒让 00:00 整点的任务也进当日清单
         it = croniter(r["cron"], start - timedelta(seconds=1))
@@ -262,7 +260,6 @@ def today_agenda() -> list[dict]:
                 "time": t.strftime("%H:%M"),
                 "when": t.strftime("%Y-%m-%d %H:%M"),   # 快捷指令可直接转日期
                 "kind": kind,
-                "icon": icon,
                 "title": title,
                 "schedule_id": r["id"],
             })

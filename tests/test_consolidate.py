@@ -49,7 +49,7 @@ async def test_consolidates_yesterday_into_library(fresh_db, monkeypatch, fake_e
     await memories.ensure_vectors()
     _chat("2026-09-23T10:00", "ジムをゴールドジムに変えたよ")
     _chat("2026-09-23T21:00", "9/30 の面接は14時からだって",
-          actions=[{"tool": "record_weight", "ok": True, "result": "⚖️ 70.1kg 記録したよ"}])
+          actions=[{"tool": "record_weight", "ok": True, "result": "70.1kg 記録したよ"}])
     _chat("2026-09-24T05:00", "おはよう")                   # 今天的习惯日:今晚才整理
     monkeypatch.setattr(consolidate, "NEIGHBOR_SIM", 0.3)
     assert float(fake_embedder("9/30 14:00 に面接がある") @ fake_embedder(interview["text"])) > 0.3
@@ -79,7 +79,7 @@ async def test_consolidates_yesterday_into_library(fresh_db, monkeypatch, fake_e
     assert old_iv["superseded_by"] and old_iv["valid_until"] is None     # UPDATE 不算「情况变了」
     assert store.get("memory.watermark") == 4                            # 9/23 最后一行;9/24 的没动
     assert [c[0] for c in calls] == ["extract", "reconcile"]
-    assert "〔実行済み: ⚖️ 70.1kg 記録したよ〕" in calls[0][1] and "おはよう" not in calls[0][1]
+    assert "〔実行済み: 70.1kg 記録したよ〕" in calls[0][1] and "おはよう" not in calls[0][1]
 
 
 async def test_failure_keeps_watermark_and_alerts_second_night(fresh_db, monkeypatch, fake_embedder, sent_notices):

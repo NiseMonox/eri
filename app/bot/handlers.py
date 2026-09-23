@@ -3,7 +3,7 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from .. import charts, clock
+from .. import charts, clock, emoji
 from ..config import settings
 from ..services import intents, routines
 
@@ -28,7 +28,7 @@ def _authorized(update: Update) -> bool:
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _authorized(update) or not update.effective_message:
         return
-    await update.effective_message.reply_text("エリだよ、おうちのAIアシスタント ✨\n\n" + HELP)
+    await update.effective_message.reply_text("エリだよ、おうちのAIアシスタント。\n\n" + HELP)
 
 
 async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -61,17 +61,17 @@ async def cmd_routine(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     opens = [i for i in routines.today_instances() if i["status"] in ("pending", "notified", "missed")]
     if not opens:
-        await update.effective_message.reply_text("いま確認待ちのルーティンはないよ 👍")
+        await update.effective_message.reply_text("いま確認待ちのルーティンはないよ")
         return
     for inst in opens[:5]:
         await update.effective_message.reply_text(
-            f"{inst['icon']} {inst['routine_name']}(予定 {clock.fmt_local(inst['due_at'])})",
+            emoji.strip(f"{inst['routine_name']}(予定 {clock.fmt_local(inst['due_at'])})"),
             reply_markup=_routine_buttons(inst["id"], inst["category"]),
         )
 
 
 def _routine_buttons(inst_id: int, category: str = "other") -> InlineKeyboardMarkup:
-    done_label = "✅ 飲んだよ" if category == "med" else "✅ やったよ"
+    done_label = "飲んだよ" if category == "med" else "やったよ"
     return InlineKeyboardMarkup([[
         InlineKeyboardButton(done_label, callback_data=f"rdone:{inst_id}"),
         InlineKeyboardButton("今回はスキップ", callback_data=f"rskip:{inst_id}"),
@@ -97,9 +97,9 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await q.edit_message_text("その記録は見つからなかったよ(削除されたかも)")
         return
     t = clock.fmt_local(row.get("done_at"), "%H:%M")
-    label = {"done": f"✅ 完了 {t}", "dismissed": f"⏭ スキップ {t}",
-             "missed": "⚠️ 期限切れ扱いだよ。やったら「やった」って言ってね"}.get(row["status"], row["status"])
-    await q.edit_message_text(f"{row['title']} {label}".strip())
+    label = {"done": f"完了 {t}", "dismissed": f"スキップ {t}",
+             "missed": "期限切れ扱いだよ。やったら「やった」って言ってね"}.get(row["status"], row["status"])
+    await q.edit_message_text(emoji.strip(f"{row['title']} {label}".strip()))
 
 
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
