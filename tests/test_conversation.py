@@ -166,7 +166,7 @@ async def test_conversation_snooze_and_done(fresh_db, monkeypatch, no_tts):
                      "OK、14時にまた声かけるね👍")
     res = await conversation.handle("手头有点事,下午再去", via="siri")
     assert res["ok"] and res["reply"] == "OK、14時にまた声かけるね"     # LLM 写的回复;Siri 去掉 emoji
-    assert "去健身房" in seen[0][0]["content"]                             # 开放事项进了系统上下文
+    assert "去健身房" in seen[0][-1]["content"]                             # 开放事项在本轮消息的【当前状态】里
     assert "14:00" in _tool_results(seen[1])[0]["result"]                 # 执行结果回喂给 LLM
     assert reminders.get(inst["id"])["status"] == "pending"
 
@@ -199,7 +199,7 @@ async def test_upcoming_reminder_can_be_rescheduled(fresh_db, monkeypatch, no_tt
                      [("snooze", {"reminder_id": r["id"], "until": "2026-08-16 16:00"})],
                      "明日16時に変えたよ")
     await conversation.handle("明天取快递改到4点", via="telegram")
-    assert "【今后的提醒】" in seen[0][0]["content"] and "取快递" in seen[0][0]["content"]
+    assert "【今后的提醒】" in seen[0][-1]["content"] and "取快递" in seen[0][-1]["content"]
     first, second = _tool_results(seen[2])
     assert first["ok"] is False and "過ぎてる" in first["result"]
     assert second["ok"] and "08/16 16:00" in second["result"]
@@ -294,7 +294,7 @@ async def test_set_recurring_via_conversation(fresh_db, monkeypatch, no_tts):
                      [("set_recurring", {"routine_id": rt["id"], "times": ["21:00"], "every_days": 2})],
                      "OK、1日おきに21時ね")
     await conversation.handle("拉伸隔一天晚上9点提醒我", via="telegram")
-    assert f"routine_id={rt['id']}" in seen[0][0]["content"]                 # 【ルーティン】进了上下文
+    assert f"routine_id={rt['id']}" in seen[0][-1]["content"]                 # 【ルーティン】在本轮消息里
     result = _tool_results(seen[1])[0]
     assert result["ok"] and "2日ごと 21:00" in result["result"] and "08/15(土) 21:00" in result["result"]
     [s] = routines.schedules_of(rt["id"])

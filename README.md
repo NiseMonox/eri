@@ -11,7 +11,8 @@
 - 💊 **服药闭环**:提醒 → 点按/语音/按钮确认 → 未确认自动重发 → 超时标漏服(可补确认)
 - ⚖️ **体重与体成分**:Withings 秤全自动同步(体重 + 体脂/肌肉/骨量/内脏脂肪/代谢年龄等 12 项),Siri/Telegram/网页手动记录,曲线图与 LLM 点评周报
 - 🔔 **提醒**:一次性 / 每天 / 每周几 / **以完成为准每 N 天**(隔天做的拉伸:忘了第二天接着提醒,做完才隔开),对话里一句话就能设;与 iPhone 提醒事项**双向同步**(快捷指令);体重同步到 Apple 健康
-- 🧠 **LLM**:DeepSeek function calling(默认 `deepseek-flash`),每句话带上下文(开放事项 + 今后的提醒 + 近 3 天对话 + 长期记忆)决策;LLM 不可用时降级到正则快路径,核心提醒不受影响
+- 🧠 **LLM**:DeepSeek function calling(默认 `deepseek-flash`),每句话带上下文(开放事项 + 今后的提醒 + 最近的对话原文 + 长期记忆)决策;LLM 不可用时降级到正则快路径,核心提醒不受影响
+- 🗂️ **长期记忆**:每天 04:00 把前一天的对话整理进记忆库(抽取 → 找相似旧条目 → 新增/更新/取代,只增不删、每批可撤销,另写一篇日记);对话时只带核心档案 + 近日安排 + 本地向量检索出的相关记忆(Ollama bge-m3),库再大注入量也不变;「记住/忘掉/查一下」随时生效
 - 📲 **推送**:Bark(时效性 / 重要警报可破静音)+ Telegram(双向,inline 按钮)
 
 输出全日语(艾莉口吻),输入中日文都听得懂。
@@ -19,7 +20,7 @@
 ## 技术栈
 
 Python 3.13 · FastAPI · APScheduler(croniter 单引擎)· SQLite(WAL,版本化原子迁移)· mpv ·
-VOICEVOX(Docker)· bark-server(Docker)· python-telegram-bot · matplotlib · Jinja2 + Chart.js。
+VOICEVOX(Docker)· bark-server(Docker)· Ollama + bge-m3(Docker,记忆向量)· python-telegram-bot · matplotlib · numpy · Jinja2 + Chart.js。
 单进程,零前端构建,时间表存 DB、网页改完即生效。
 
 ## 快速开始
@@ -31,6 +32,7 @@ bash scripts/gen_media.sh      # 生成白噪音/占位闹钟音
 cp .env.example .env           # 填 API_TOKEN 等
 cd deploy/bark && docker compose up -d && cd ../..      # Bark 推送服务
 cd deploy/voicevox && docker compose up -d && cd ../..  # 语音引擎(可选)
+cd deploy/ollama && docker compose up -d && docker exec ollama ollama pull bge-m3 && cd ../..  # 记忆向量(可选,不开则不检索记忆)
 make deploy                    # systemd 上线(端口 8300)
 ```
 
@@ -43,11 +45,11 @@ make deploy                    # systemd 上线(端口 8300)
 ```
 app/
 ├── scheduler/    # schedules 表 → APScheduler(croniter),sweeper(服药重发/提醒追催)
-├── services/     # weights / meds 状态机 / reminders 实例化 / conversation 对话大脑 / intents / body_metrics
+├── services/     # weights / routines / reminders 实例化 / conversation 对话大脑 / memories 记忆库 + consolidate 每日整理 / intents / body_metrics
 ├── audio/        # manager(会话/渐强/播报共存) / mpv_player / tts(VOICEVOX + 缓存 + 静音)
 ├── notify/       # Bark + Telegram 统一入口
 ├── bot/          # Telegram long-polling + 正则兜底(LLM 不可用时)
-├── llm/          # DeepSeek API(模型在 /settings 改)
+├── llm/          # DeepSeek API(模型在 /settings 改)+ embed(本地 Ollama 向量)
 ├── ingest/       # Withings OAuth+全量轮询 / Health Auto Export
 └── routers/      # API + 网页 + 短链回调
 ```

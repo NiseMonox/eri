@@ -1,37 +1,47 @@
 """对话层:自由文本的统一大脑。Telegram 与 Siri(/api/ingest/text)都走 handle()。
 每句话都交给 LLM(function calling):像聊天一样回复,同时按意图自动调用工具——一句话里几件事就调几个。
 工具 = 下面 _execute 的既有动作(id 验明正身、时间校验都在那里),LLM 看到执行结果再用艾莉口吻回复。
-LLM 关闭/不可用时降级到正则快路径(模板回复),核心记录照常。每轮结束后异步跑记忆维护(不阻塞回复)。"""
+LLM 关闭/不可用时降级到正则快路径(模板回复),核心记录照常。
+记忆:system 带【核心档案】;最后一条消息带【当前状态】【近日の予定】【相关记忆】(本地向量检索)+ 本次原话。
+长期记忆由每天 04:00 的整理写入(consolidate.py),这里只有「记住/忘掉/查」三个即时工具。"""
 
-import asyncio
 import json
 import re
+from dataclasses import dataclass, field
 from datetime import timedelta
 
 from .. import clock, db, events, store
 from ..bot import parser
 from ..llm import base as llm
+from ..llm import embed
 from . import intents, memories, reminders, routines
 
 SYSTEM = """你是「艾莉」(エリ),用户家里的 AI 助手兼健康秘书:帮用户记体重、管提醒、到点催促,也陪着聊天。
 
+【消息结构】
+- 这条系统消息末尾的【核心档案】是关于用户最重要的长期信息
+- 每轮最后一条消息 = 系统注入的【当前状态】(时间、开放事项、今后的提醒、ルーティン、身体数据)+【近日の予定】【相关记忆】(从长期记忆库按时间/按这句话取出,带日期,旧的可能已过时)+【ユーザーの発言】(用户这次真正说的话)
+- 历史消息里用户话前的 [MM/DD HH:MM] 是发送时间,艾莉话前的〔実行済み: …〕是系统记下的已执行操作;你的回复里不要写这两种标注
+
 【说话方式】
 - 回复一律日语,像朋友一样轻松(だよ/ね口吻),一般 1-3 句,不说教
 - 用户说中文或日语都要理解,但别把中文词原样混进日语回复(如「健身」→「ジム/運動」)
-- 只依据【上下文】和工具返回的结果说话:不编数据,没执行成功的事不能说做了
+- 纯文本:Telegram 不渲染 Markdown,不要用 **粗体**、# 标题;要列举就用「・」开头的短行
+- 只依据上面这些信息和工具返回的结果说话:不编数据,没执行成功的事不能说做了;记忆和对话记录冲突时以对话记录为准
 
 【工具】
-- 话里有能用工具办的事(记体重、建提醒、设重复提醒、推迟/改期、完成、取消、忘掉记忆、看今日待办、体重曲线、周报)就直接调用,不用先征求同意;一句话里有几件事就调几个
-- 纯聊天、问身体数据(用【身体数据】的数字答)、问「你记得我什么」(用【长期记忆】答)时不调工具,直接回复
-- reminder_id 只能取自【开放事项】或【今后的提醒】,routine_id 只能取自【ルーティン】,memory_id 只能取自【长期记忆】;对不上号时别猜,问清楚
-- 时间一律东京时间 yyyy-MM-dd HH:mm,按【当前时间】换算:「下午」=14:00、「晚上」=20:00、「待会/过会」=+1 小时;只说了钟点而今天这个钟点已过,就当明天
+- 话里有能用工具办的事(记体重、建提醒、设重复提醒、推迟/改期、完成、取消、记住、忘掉、查记忆、看今日待办、体重曲线、周报)就直接调用,不用先征求同意;一句话里有几件事就调几个
+- 纯聊天、问身体数据(用【身体数据】的数字答)、问「你记得我什么」(用【核心档案】【相关记忆】答)时不调工具,直接回复
+- reminder_id 只能取自【开放事项】或【今后的提醒】,routine_id 只能取自【ルーティン】,memory_id 只能取自【核心档案】【近日の予定】【相关记忆】或 search_memory 的结果;对不上号时别猜,问清楚
+- 时间一律东京时间 yyyy-MM-dd HH:mm,按当前时间换算:「下午」=14:00、「晚上」=20:00、「待会/过会」=+1 小时;只说了钟点而今天这个钟点已过,就当明天
 - 一次性的事用 create_reminder;重复的事(每天吃药、隔一天做拉伸、每周一倒垃圾)用 set_recurring——【ルーティン】里已有的传它的 routine_id 修改,别重复新建;没说几点提醒就先问
 - 用户说做完了:【开放事项】里有对应项用 mark_done,没有(比如提醒之前就做了)用 record_routine_done;说的是过去的事(「昨晚其实做了」)就把实际时刻填进 done_at
-- 工具返回 ok=false 时照实说明原因,需要的话问清楚
-- 历史消息里用户话前面的 [MM/DD HH:MM] 是发送时间;你的回复不要带这种时间戳"""
+- 用户明确说「记住…」才用 remember(日常对话不用,每天夜里会自动整理进记忆);问到过去的事而上面找不到时才用 search_memory(query 用日语;问某一天就给日期)
+- 工具返回 ok=false 时照实说明原因,需要的话问清楚"""
 
 SIRI_NOTE = "\n\n这条消息来自 Siri 语音,回复会被朗读:不要用 emoji、列表和符号,说得口语一点。"
 # 提示词管不住模型加 emoji,Siri 回复在代码里兜底删掉(快捷指令会把 😌 念成「ほっとした顔」)
+RE_ACTION_TAG = re.compile(r"〔実行済み[^〕]*〕\s*")   # 模型偶尔学着历史写标注,回复里删掉
 RE_EMOJI = re.compile("[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U0000FE0F\U0000200D]")
 FALLBACK_REPLY = "ごめん、いま頭がうまく回らないみたい。「62.5」で体重記録、「薬飲んだ」で服薬確認はできるよ"
 MAX_ROUNDS = 4          # 一句话最多几轮「调工具 → 看结果」
@@ -63,7 +73,7 @@ TOOLS = [
           {"reminder_id": _RID, "done_at": _PAST}, ["reminder_id"]),
     _tool("dismiss", "取消某项,不再催(「今天不去了」「算了取消吧」)",
           {"reminder_id": _RID}, ["reminder_id"]),
-    _tool("forget_memory", "忘掉一条长期记忆(「那个不用记了」)",
+    _tool("forget_memory", "忘掉一条长期记忆(「那个不用记了」);id 取自【核心档案】【近日の予定】【相关记忆】或检索结果",
           {"memory_id": {"type": "integer", "description": "【长期记忆】里的 id"}}, ["memory_id"]),
     _tool("show_today", "取今天的待办/日程清单"),
     _tool("weight_chart", "生成体重曲线图(图片会附在回复里)",
@@ -86,21 +96,46 @@ TOOLS = [
     _tool("record_routine_done",
           "记录某个 routine 做完了——【开放事项】里没有对应项时用(比如提醒之前就做了);以完成为准的间隔从这次重新算",
           {"routine_id": _ROUTINE, "done_at": _PAST}, ["routine_id"]),
+    _tool("remember", "用户明确要求「记住…」时立刻存进长期记忆(平常的对话不用,每天夜里会自动整理)",
+          {"text": {"type": "string", "description": "日语、第三人称一句;有日期写绝对日期(如「9/24 は傘を持っていく」)"},
+           "kind": {"type": "string", "enum": ["fact", "preference", "schedule", "event", "mood"],
+                    "description": "fact 事实 / preference 偏好习惯 / schedule 将来的安排 / event 发生过的事 / mood 近况"},
+           "event_at": {"type": ["string", "null"], "description": "schedule/event 的时间 yyyy-MM-dd[ HH:mm]"},
+           "core": {"type": "boolean", "description": "是否放进核心档案(长期重要的:目标、过敏、固定习惯)"}},
+          ["text"]),
+    _tool("search_memory",
+          "查长期记忆库里过去的事——只在【核心档案】【相关记忆】和对话记录里都找不到答案时用"
+          "(「上周三我说了什么」「你还记得我去年…吗」)",
+          {"query": {"type": ["string", "null"], "description": "用日语写的检索语句;只按日期查时为 null"},
+           "date_from": {"type": ["string", "null"], "description": "yyyy-MM-dd"},
+           "date_to": {"type": ["string", "null"], "description": "yyyy-MM-dd"}}),
 ]
 # 工具名 → _execute 的动作名
 TOOL_ACTIONS = {"record_weight": "weight", "create_reminder": "reminder", "snooze": "snooze",
                 "mark_done": "done", "dismiss": "dismiss", "forget_memory": "forget",
                 "show_today": "today", "weight_chart": "chart", "weekly_report": "report",
                 "set_recurring": "recurring", "stop_recurring": "stop_recurring",
-                "record_routine_done": "routine_record"}
+                "record_routine_done": "routine_record", "remember": "remember", "search_memory": "search_memory"}
+# 这些工具的结果不写进 chat_log.actions(不是需要记住的事实),只记工具名
+READ_ONLY_TOOLS = {"show_today", "weight_chart", "weekly_report", "search_memory", "today", "chart", "report"}
 
 STANDARD_INTENTS = {"weight", "reminder", "today", "chart", "report"}
 
 
-def _log(via: str, role: str, text: str) -> None:
+@dataclass
+class TurnCtx:
+    """一轮对话内工具共享的状态:本轮 LLM 看得到的记忆 id(forget 只能动这些)、执行过的操作(写进 chat_log.actions)。"""
+    visible: set = field(default_factory=set)
+    actions: list = field(default_factory=list)
+    remembered: int = 0
+
+
+def _log(via: str, role: str, text: str, *, ts: str | None = None, actions: list | None = None) -> None:
+    """chat_log 是长期记忆的唯一来源:原文最多留 4000 字;assistant 行带上本轮执行过的操作。"""
     conn = db.get_db()
-    conn.execute("INSERT INTO chat_log (ts, via, role, text) VALUES (?,?,?,?)",
-                 (clock.now_iso(), via, role, text[:500]))
+    conn.execute("INSERT INTO chat_log (ts, via, role, text, actions) VALUES (?,?,?,?,?)",
+                 (ts or clock.now_iso(), via, role, text[:4000],
+                  json.dumps(actions, ensure_ascii=False) if actions else None))
     conn.commit()
 
 
@@ -111,13 +146,17 @@ def _est_tokens(s: str) -> int:
 
 
 def _recent_chat() -> list[dict]:
-    """3 天窗口 + token 预算(chat.context_budget_tokens,默认 1500):从最新往回取,超预算即停。"""
-    hours = int(store.get("chat.context_hours", 72) or 72)
-    budget = int(store.get("chat.context_budget_tokens", 1500) or 1500)
-    cutoff = clock.iso(clock.now_utc() - timedelta(hours=hours))
-    rows = db.get_db().execute(
-        "SELECT * FROM chat_log WHERE ts>=? ORDER BY id DESC LIMIT 200", (cutoff,)
-    ).fetchall()
+    """对话原文窗口:昨天习惯日起点(04:00)以后的 ∪ 还没整理进记忆的(开着记忆时);超预算从最旧的丢。
+    起点一天只前移一次:一天之内历史只往后追加,前缀稳定、能命中 DeepSeek 缓存。"""
+    anchor = clock.iso(routines.habit_day_start(routines.habit_day(clock.now_local()) - timedelta(days=1)))
+    budget = int(store.get("chat.context_budget_tokens", 3000) or 3000)
+    conn = db.get_db()
+    if store.get("memory.enabled", True):
+        rows = conn.execute("SELECT * FROM chat_log WHERE id > ? OR ts >= ? ORDER BY id DESC LIMIT 400",
+                            (int(store.get("memory.watermark", 0) or 0), anchor)).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM chat_log WHERE ts >= ? ORDER BY id DESC LIMIT 400",
+                            (anchor,)).fetchall()
     picked, used = [], 0
     for r in rows:
         t = _est_tokens(r["text"])
@@ -138,13 +177,13 @@ def _context() -> str:
             state = {"pending": "待触发", "notified": "已提醒,等回应", "missed": "超时未回应"}.get(
                 r["status"], r["status"])
             tag = "routine" if r.get("kind") == "routine" else "提醒"
-            lines.append(f"- id={r['id']} [{tag}]「{r['title']}」 {clock.fmt_local(r['due_at'])} [{state}]")
+            lines.append(f"- id={r['id']} [{tag}]「{r['title']}」 {memories.date_label(r['due_at'], True)} [{state}]")
 
     upcoming = reminders.upcoming()
     if upcoming:
         lines.append("【今后的提醒】")
         for r in upcoming:
-            lines.append(f"- id={r['id']}「{r['title']}」 {clock.fmt_local(r['due_at'])}")
+            lines.append(f"- id={r['id']}「{r['title']}」 {memories.date_label(r['due_at'], True)}")
 
     rts = routines.list_all()
     if rts:
@@ -169,48 +208,82 @@ def _context() -> str:
     if act:
         lines.append(f"【活動】(Apple Watch)最新 {act}")
 
-    mem = memories.context_block()
-    if mem:
-        lines.append(mem)
-
     return "\n".join(lines)
 
 
-def _history() -> list[dict]:
-    """近 3 天对话(预算内)转成真正的多轮消息;用户话前缀发送时间,模型才分得清新旧。"""
-    msgs = [{"role": "user", "content": f"[{clock.fmt_local(c['ts'], '%m/%d %H:%M')}] {c['text']}"}
-            if c["role"] == "user" else {"role": "assistant", "content": c["text"]}
-            for c in _recent_chat()]
+def _history() -> tuple[list[dict], int | None]:
+    """原文窗口转成真正的多轮消息,返回 (messages, 窗口里最早的 chat_log.id)。
+    用户话前缀发送时间(模型才分得清新旧),艾莉话前缀〔実行済み: …〕(知道自己当时做了什么)。"""
+    rows = _recent_chat()
+    msgs = []
+    for c in rows:
+        if c["role"] == "user":
+            msgs.append({"role": "user", "content": f"[{clock.fmt_local(c['ts'], '%m/%d %H:%M')}] {c['text']}"})
+        else:
+            note = memories.actions_note(c.get("actions"))
+            msgs.append({"role": "assistant", "content": f"{note}\n{c['text']}" if note else c["text"]})
     while msgs and msgs[0]["role"] == "assistant":     # 预算截断后别让历史以艾莉的话开头
         msgs.pop(0)
-    return msgs
+    return msgs, (rows[0]["id"] if rows else None)
+
+
+async def _related(text: str, first_id: int | None) -> list[dict]:
+    """每句话自动检索相关记忆。纯体重数字/「薬飲んだ」这类不需要回忆;不到 12 字的短句拼上 15 分钟内的
+    上一句再检索(「那个呢?」)。Ollama 不可用 → 空,照常回复。"""
+    if parser.parse_regex(text):
+        return []
+    q = text
+    if len(text) < 12:
+        prev = db.get_db().execute(
+            "SELECT text FROM chat_log WHERE role='user' AND ts>=? ORDER BY id DESC LIMIT 1",
+            (clock.iso(clock.now_utc() - timedelta(minutes=15)),)).fetchone()
+        if prev:
+            q = f"{prev['text']} {text}"
+    vec = await embed.embed_query(q)
+    rows, top5 = memories.related(vec, hist_first_id=first_id)
+    if top5:     # 记下过门槛前的 top5 分数,用真实数据校准 memory.rag_min_sim
+        events.log("memory_rag", {"q": q[:40], "top": top5, "picked": [r["id"] for r in rows]})
+    return rows
+
+
+def _turn_message(text: str, via: str, arrived: str, upcoming: str, related: list[dict]) -> str:
+    parts = ["【当前状态】\n" + _context(), upcoming, memories.related_block(related),
+             f"【ユーザーの発言】[{clock.fmt_local(arrived, '%m/%d %H:%M')}] {text}"]
+    return "\n\n".join(p for p in parts if p) + (SIRI_NOTE if via == "siri" else "")
 
 
 async def handle(text: str, via: str) -> dict:
     """返回 {"ok", "reply", "photo"}。"""
+    arrived = clock.now_iso()
     text = text.strip()
-    res = await _agent(text, via)
-    used_llm = res is not None
+    ctx = TurnCtx()
+    res = await _agent(text, via, arrived, ctx)
     if res is None:
         # LLM 关闭/不可用:能被正则认出的(体重/服药/今日/图表/周报)照样执行,核心记录不断
         fast = parser.parse_regex(text)
-        res = await _execute(fast, text, via) if fast else _r(False, FALLBACK_REPLY)
+        res = await _execute(fast, text, via, ctx) if fast else _r(False, FALLBACK_REPLY)
+        if fast:
+            _note_action(ctx, fast.get("intent", "?"), res)
+    res["reply"] = RE_ACTION_TAG.sub("", res["reply"]).strip() or res["reply"]
     if via == "siri":
         res["reply"] = RE_EMOJI.sub("", res["reply"]).strip()
-    _log(via, "user", text)
-    _log(via, "assistant", res["reply"])
-    if used_llm and store.get("memory.enabled", True):
-        # 持引用防 GC
-        _bg.add(t := asyncio.create_task(_maintain_safe(text, res["reply"])))
-        t.add_done_callback(_bg.discard)
+    _log(via, "user", text, ts=arrived)
+    _log(via, "assistant", res["reply"], actions=ctx.actions)
     return res
 
 
-async def _agent(text: str, via: str) -> dict | None:
+async def _agent(text: str, via: str, arrived: str, ctx: TurnCtx) -> dict | None:
     """工具调用循环。首轮 LLM 就失败 → None(交给正则兜底);
-    执行过工具后 LLM 才失败 → 用工具的模板回复收尾(不能再走正则,会重复执行)。"""
-    system = SYSTEM + "\n\n【上下文】\n" + _context() + (SIRI_NOTE if via == "siri" else "")
-    messages = [{"role": "system", "content": system}, *_history(), {"role": "user", "content": text}]
+    执行过工具后 LLM 才失败 → 用工具的模板回复收尾(不能再走正则,会重复执行)。
+    消息顺序按「越靠前越稳定」排:人设+核心档案 → 原文历史 → 本轮状态/记忆/原话(命中前缀缓存)。"""
+    history, first_id = _history()
+    core_text, core_ids = memories.core_block()
+    upcoming, up_ids = memories.upcoming_block()
+    related = await _related(text, first_id)
+    ctx.visible |= core_ids | up_ids | {r["id"] for r in related}
+    messages = [{"role": "system", "content": SYSTEM + (f"\n\n{core_text}" if core_text else "")},
+                *history,
+                {"role": "user", "content": _turn_message(text, via, arrived, upcoming, related)}]
     done: list[dict] = []
     for _ in range(MAX_ROUNDS):
         msg = await llm.chat(messages, tools=TOOLS, timeout=30)
@@ -227,7 +300,7 @@ async def _agent(text: str, via: str) -> dict | None:
             turn["reasoning_content"] = msg["reasoning_content"]   # DeepSeek 思考模式:同一轮内回传推理
         messages.append(turn)
         for call in calls:
-            res = await _run_tool(call, text, via)
+            res = await _run_tool(call, text, via, ctx)
             done.append(res)
             messages.append({"role": "tool", "tool_call_id": call.get("id"),
                              "content": json.dumps({"ok": res["ok"], "result": res["reply"]},
@@ -235,7 +308,7 @@ async def _agent(text: str, via: str) -> dict | None:
     return _result(done)      # 轮数用尽
 
 
-async def _run_tool(call: dict, user_text: str, via: str) -> dict:
+async def _run_tool(call: dict, user_text: str, via: str, ctx: TurnCtx) -> dict:
     fn = call.get("function") or {}
     kind = TOOL_ACTIONS.get(fn.get("name"))
     try:
@@ -245,10 +318,17 @@ async def _run_tool(call: dict, user_text: str, via: str) -> dict:
     if kind is None or not isinstance(args, dict):
         return _r(False, f"ツールの呼び出しが不正だよ({fn.get('name')})")
     try:
-        return await _execute({**args, "action": kind}, user_text, via)
+        res = await _execute({**args, "action": kind}, user_text, via, ctx)
     except Exception as e:  # noqa: BLE001  一个工具出错不拖垮整轮对话,错误回喂给 LLM
         events.log("tool_error", {"tool": fn.get("name"), "error": str(e)[:200]})
-        return _r(False, "ごめん、その処理でエラーが出ちゃった")
+        res = _r(False, "ごめん、その処理でエラーが出ちゃった")
+    _note_action(ctx, fn.get("name"), res)
+    return res
+
+
+def _note_action(ctx: TurnCtx, tool: str, res: dict) -> None:
+    ctx.actions.append({"tool": tool, "ok": res["ok"],
+                        "result": None if tool in READ_ONLY_TOOLS else res["reply"][:200]})
 
 
 def _result(done: list[dict], reply: str | None = None) -> dict:
@@ -258,17 +338,7 @@ def _result(done: list[dict], reply: str | None = None) -> dict:
             "photo": next((d["photo"] for d in done if d.get("photo") is not None), None)}
 
 
-_bg: set = set()
-
-
-async def _maintain_safe(user_text: str, reply: str) -> None:
-    try:
-        await memories.maintain_after_turn(user_text, reply)
-    except Exception as e:  # noqa: BLE001
-        events.log("memory_error", {"error": str(e)[:200]})
-
-
-async def _execute(action: dict, user_text: str, via: str) -> dict:
+async def _execute(action: dict, user_text: str, via: str, ctx: TurnCtx | None = None) -> dict:
     kind = action.get("action") or action.get("intent")
 
     # 正则快路径的 med_confirm / routine_done:找最近待确认实例
@@ -342,12 +412,17 @@ async def _execute(action: dict, user_text: str, via: str) -> dict:
             mid = int(action["memory_id"])
         except (KeyError, TypeError, ValueError):
             return _r(False, "どの記憶のことか分からなかったよ")
-        active_ids = {m["id"] for m in memories.list_all()}
-        if mid not in active_ids:
-            return _r(False, "その記憶は見つからなかったよ")
         m = memories.get(mid)
+        if ctx is None or mid not in ctx.visible or m is None or not m["active"]:
+            return _r(False, "その記憶は見つからなかったよ")
         memories.deactivate(mid, reason="user")
         return _r(True, f"忘れたよ:「{m['text']}」")
+
+    if kind == "remember":
+        return await _remember(action, ctx)
+
+    if kind == "search_memory":
+        return await _search_memory(action, ctx)
 
     if kind == "recurring":
         return _set_recurring(action)
@@ -382,6 +457,55 @@ async def _execute(action: dict, user_text: str, via: str) -> dict:
 
 def _r(ok: bool, reply: str) -> dict:
     return {"ok": ok, "reply": reply, "photo": None}
+
+
+async def _remember(action: dict, ctx: TurnCtx | None) -> dict:
+    """「记住…」:立即写入(夜间整理之外唯一的写入口)。查重、拒相对日期、核心档案满了降为普通条目。"""
+    text = str(action.get("text") or "").strip()
+    if not text:
+        return _r(False, "何を覚えればいいか分からなかったよ")
+    if memories.RE_RELATIVE.search(text):
+        return _r(False, "「明日」みたいな言い方は後で分からなくなるから、日付で書き直してね(例: 9/24)")
+    if ctx is not None and ctx.remembered >= 3:
+        return _r(False, "一度に覚えるのは3つまでにしてね")
+    kind = action.get("kind") if action.get("kind") in ("fact", "preference", "schedule", "event", "mood") else "fact"
+    try:
+        event_at = clock.parse_flexible_jst(str(action["event_at"])) if action.get("event_at") else None
+    except ValueError:
+        return _r(False, "日時が読み取れなかったよ")
+    if kind == "schedule" and event_at is None:
+        return _r(False, "予定は日時もいっしょに教えてね")
+    vec = await embed.embed_query(text)
+    dup = memories.find_duplicate(text, vec)
+    if dup:
+        if ctx is not None:
+            ctx.visible.add(dup["id"])
+        return _r(True, f"もう覚えてるよ(#{dup['id']}「{dup['text']}」)")
+    core = bool(action.get("core")) and kind in memories.CORE_KINDS
+    note = ""
+    if core and memories.core_usage()["count"] >= int(store.get("memory.core_max", 20) or 20):
+        core, note = False, "(コアメモが満杯だから普通の記憶として保存したよ。/memories で整理してね)"
+    row = memories.add(kind, text, event_at=event_at, core=core, source="user", vec=vec)
+    if ctx is not None:
+        ctx.visible.add(row["id"])
+        ctx.remembered += 1
+    return _r(True, f"🧠 覚えたよ(#{row['id']}){note}")
+
+
+async def _search_memory(action: dict, ctx: TurnCtx | None) -> dict:
+    q = str(action.get("query") or "").strip() or None
+    days: list[str | None] = []
+    for k in ("date_from", "date_to"):
+        try:
+            days.append(memories.local_day(clock.parse_flexible_jst(str(action[k]))) if action.get(k) else None)
+        except ValueError:
+            return _r(False, "日付が読み取れなかったよ")
+    if not q and not any(days):
+        return _r(False, "何を探せばいいか分からなかったよ")
+    hits = memories.search(q, await embed.embed_query(q) if q else None, days[0], days[1])
+    if ctx is not None:
+        ctx.visible |= {h["id"] for h in hits if h.get("id")}
+    return _r(True, "\n".join(h["line"] for h in hits) if hits else "記憶の中には見つからなかったよ")
 
 
 def _past_time(v) -> str | None:

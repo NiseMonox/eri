@@ -233,13 +233,18 @@ def habit_day(dt_local: datetime) -> date:
     return (dt_local - timedelta(hours=DAY_START_HOUR)).date()
 
 
+def habit_day_start(day: date) -> datetime:
+    """习惯日的起点(东京时间 day 的 04:00)。记忆整理与对话窗口也按这个边界切天。"""
+    return datetime.combine(day, time(DAY_START_HOUR), tzinfo=clock.TOKYO)
+
+
 def last_done_at(routine_id: int, before: date | None = None) -> str | None:
     """最近一次完成时刻(UTC ISO);before=只看这个习惯日之前的。"""
     q = "SELECT MAX(done_at) FROM reminders WHERE kind='routine' AND routine_id=? AND status='done'"
     args: list = [routine_id]
     if before is not None:
         q += " AND done_at < ?"
-        args.append(clock.iso(datetime.combine(before, time(DAY_START_HOUR), tzinfo=clock.TOKYO)))
+        args.append(clock.iso(habit_day_start(before)))
     return db.get_db().execute(q, args).fetchone()[0]
 
 

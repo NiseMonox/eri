@@ -8,13 +8,18 @@ from ..config import settings
 URL = "https://api.deepseek.com/chat/completions"
 
 
-async def chat(messages: list[dict], tools: list[dict] | None = None, timeout: int = 45) -> dict:
-    """返回 choices[0].message(content / tool_calls / reasoning_content)。"""
+async def chat(messages: list[dict], tools: list[dict] | None = None, timeout: int = 45,
+               model: str | None = None, response_format: dict | None = None) -> dict:
+    """返回 choices[0].message(content / tool_calls / reasoning_content)。
+    model 缺省取 llm.model;response_format={"type":"json_object"} = JSON 模式(夜间整理用)。"""
     if not settings.deepseek_api_key:
         raise RuntimeError("DEEPSEEK_API_KEY 未配置")
-    body = {"model": store.get("llm.model", "deepseek-flash"), "messages": messages, "temperature": 0.3}
+    body = {"model": model or store.get("llm.model", "deepseek-flash"), "messages": messages,
+            "temperature": 0.3}
     if tools:
         body["tools"] = tools
+    if response_format:
+        body["response_format"] = response_format
     async with httpx.AsyncClient(timeout=timeout) as client:
         r = await client.post(
             URL,

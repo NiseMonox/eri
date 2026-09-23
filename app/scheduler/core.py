@@ -80,7 +80,7 @@ def register_internal() -> None:
                       misfire_grace_time=3600, **common)
     scheduler.add_job(jobs.weekly_trim, CroniterTrigger("0 5 * * 1"), id="int:trim",
                       misfire_grace_time=3600, **common)
-    scheduler.add_job(jobs.memory_cleanup, CroniterTrigger("0 4 * * *"), id="int:memory_cleanup",
+    scheduler.add_job(jobs.memory_consolidate, CroniterTrigger("0 4 * * *"), id="int:memory_consolidate",
                       misfire_grace_time=3600, **common)
     from ..ingest.withings import poll_if_due
 

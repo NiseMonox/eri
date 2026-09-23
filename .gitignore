@@ -8,3 +8,4 @@ __pycache__/
 .pytest_cache/
 deploy/bark/bark-data/
 media/*.wav
+deploy/ollama/ollama-data/

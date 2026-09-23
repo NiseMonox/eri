@@ -21,10 +21,16 @@ EDITABLE_KEYS = {
     "tts.volume": 80,
     "tts.speak_replies": True,        # 对话确认(推迟/完成)也用音箱念出来
     "reminder.nag_defaults": {"every_min": 30, "max": 3, "grace_min": 120},   # 提醒/routine 无回应追催
-    "chat.context_hours": 72,          # 短期对话窗口(小时)
-    "chat.context_budget_tokens": 1500,  # 短期对话注入上限(粗估 token)
-    "memory.enabled": True,            # 长期记忆自动维护开关
-    "memory.context_budget_tokens": 600,   # 长期记忆注入上限(粗估 token)
+    "chat.context_budget_tokens": 3000,  # 对话原文注入上限(粗估 token;窗口 = 昨天 04:00 起 ∪ 还没整理的)
+    "memory.enabled": True,            # 每天 04:00 把对话整理进长期记忆库(只管整理;注入/记住/忘掉不受影响)
+    "memory.core_budget_tokens": 400,  # 核心档案(每次都带)上限
+    "memory.core_max": 20,             # 核心档案条数上限(夜间整理每晚最多提名 2 条)
+    "memory.rag_top_k": 6,             # 每句话自动带上的相关记忆条数
+    "memory.rag_min_sim": 0.60,        # 相关记忆相似度门槛(bge-m3 中文问日语:无关闲聊最高 ~0.57)
+    "memory.rag_budget_tokens": 400,   # 相关记忆注入上限
+    "memory.embed_url": "http://127.0.0.1:11434",   # Ollama(deploy/ollama)
+    "memory.embed_model": "bge-m3",    # 换模型后到 /memories 点「ベクトル再計算」
+    "memory.llm_model": "",            # 夜间整理用的模型;空 = 和 llm.model 一样
 }
 
 

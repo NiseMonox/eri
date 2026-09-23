@@ -14,9 +14,10 @@ from .. import clock, events, store
 from ..audio.manager import audio_manager
 from ..auth import COOKIE_NAME, require_page_login
 from ..config import settings
+from ..llm import embed
 from ..notify.service import notify
 from ..scheduler import jobs
-from ..services import memories, reminders, routines, weights
+from ..services import consolidate, memories, reminders, routines, weights
 from ..services import schedules as sched_svc
 
 router = APIRouter()
@@ -212,30 +213,55 @@ async def routines_inst_skip(request: Request, iid: int):
 # --- memories ---
 
 @router.get("/memories")
-async def memories_page(request: Request):
+async def memories_page(request: Request, q: str = "", kind: str = "", page: int = 1):
     if r := require_page_login(request):
         return r
-    return _render(request, "memories.html", rows=memories.list_all(),
-                   inactive=[m for m in memories.list_all(include_inactive=True) if not m["active"]][:30],
-                   kinds=memories.KIND_JA)
+    return _memories_render(request, q=q, kind=kind, page=max(page, 1))
 
 
-@router.post("/memories/{mid}/reactivate")
-async def memories_reactivate(request: Request, mid: int):
-    if r := require_page_login(request):
-        return r
-    memories.reactivate(mid)
-    return _back(request, "/memories", msg="思い出したよ")
+def _memories_render(request: Request, *, q: str = "", kind: str = "", page: int = 1,
+                     preview: dict | None = None):
+    limit = 50
+    rows = memories.list_rows(q=q or None, kind=kind or None, limit=limit + 1, offset=(page - 1) * limit)
+    return _render(request, "memories.html", rows=rows[:limit], has_next=len(rows) > limit, page=page,
+                   q=q, kind=kind, core=memories.core_rows(), usage=memories.core_usage(),
+                   status=consolidate.status(), forgotten=memories.forgotten(30),
+                   kinds=memories.KIND_JA, core_kinds=memories.CORE_KINDS, preview=preview)
 
 
 @router.post("/memories/create")
 async def memories_create(request: Request, kind: str = Form("fact"), text: str = Form(...),
-                          valid_until: str = Form("")):
+                          event_at: str = Form(""), core: str = Form("")):
     if r := require_page_login(request):
         return r
-    until = clock.local_input_to_utc_iso(valid_until) if valid_until else None
-    memories.add(kind, text, until, source="user")
+    at = clock.local_input_to_utc_iso(event_at) if event_at else None
+    if kind == "schedule" and at is None:
+        return _back(request, "/memories", err="予定は日時もいっしょに入れてね")
+    memories.add(kind, text, event_at=at, core=bool(core), source="user", vec=await embed.embed_query(text))
     return _back(request, "/memories", msg="覚えたよ")
+
+
+@router.post("/memories/{mid}/update")
+async def memories_update(request: Request, mid: int, text: str = Form(...)):
+    if r := require_page_login(request):
+        return r
+    if memories.set_text(mid, text) is None:
+        return _back(request, "/memories", err="その記憶は見つからなかったよ")
+    try:
+        await memories.ensure_vectors()
+    except embed.EmbedUnavailable:
+        pass   # 夜間整理时回填
+    return _back(request, "/memories", msg="更新したよ")
+
+
+@router.post("/memories/{mid}/core")
+async def memories_core(request: Request, mid: int):
+    if r := require_page_login(request):
+        return r
+    m = memories.get(mid)
+    if m is None or not memories.set_core(mid, not m["core"]):
+        return _back(request, "/memories", err="コアにできるのは「事実」と「好み・習慣」だけだよ")
+    return _back(request, "/memories", msg="コアから外したよ" if m["core"] else "コアに入れたよ")
 
 
 @router.post("/memories/{mid}/delete")
@@ -246,14 +272,56 @@ async def memories_delete(request: Request, mid: int):
     return _back(request, "/memories", msg="忘れたよ")
 
 
-@router.post("/memories/{mid}/update")
-async def memories_update(request: Request, mid: int, text: str = Form(...),
-                          valid_until: str = Form("")):
+@router.post("/memories/{mid}/reactivate")
+async def memories_reactivate(request: Request, mid: int):
     if r := require_page_login(request):
         return r
-    until = clock.local_input_to_utc_iso(valid_until) if valid_until else None
-    memories.update(mid, text, until)
-    return _back(request, "/memories", msg="更新したよ")
+    if not memories.reactivate(mid):
+        return _back(request, "/memories", err="思い出せなかったよ(同じ日の日記がもうあるかも)")
+    return _back(request, "/memories", msg="思い出したよ")
+
+
+@router.post("/memories/consolidate")
+async def memories_consolidate(request: Request, dry_run: str = Form("")):
+    if r := require_page_login(request):
+        return r
+    res = await consolidate.run(dry_run=bool(dry_run), force=True)
+    if dry_run:
+        return _memories_render(request, preview=res)
+    if res.get("skipped") == "running":
+        return _back(request, "/memories", err="いま整理中だよ。少し待ってね")
+    if res.get("error") and not res.get("days"):
+        return _back(request, "/memories", err=f"整理に失敗したよ:{res['error']}")
+    days = res.get("days") or []
+    if not days:
+        return _back(request, "/memories", msg="整理する会話はまだないよ(その日が終わる 04:00 以降に整理できる)")
+    total = {k: sum(d.get(k, 0) for d in days) for k in ("added", "updated", "superseded", "skipped")}
+    return _back(request, "/memories",
+                 msg=f"{len(days)}日分を整理したよ:追加 {total['added']}・更新 {total['updated']}・"
+                     f"置き換え {total['superseded']}・既知 {total['skipped']}")
+
+
+@router.post("/memories/undo")
+async def memories_undo(request: Request):
+    if r := require_page_login(request):
+        return r
+    last = consolidate.status()["last_run"]
+    try:
+        res = consolidate.undo(last["id"] if last else 0)
+    except ValueError as e:
+        return _back(request, "/memories", err=str(e))
+    return _back(request, "/memories", msg=f"{res['day']} の整理を取り消したよ(次の整理でやり直す)")
+
+
+@router.post("/memories/reembed")
+async def memories_reembed(request: Request):
+    if r := require_page_login(request):
+        return r
+    try:
+        n = await memories.ensure_vectors(limit=100000)
+    except embed.EmbedUnavailable as e:
+        return _back(request, "/memories", err=f"ベクトルモデルに繋がらないよ:{e}")
+    return _back(request, "/memories", msg=f"{n} 件のベクトルを計算したよ")
 
 
 # --- weights ---

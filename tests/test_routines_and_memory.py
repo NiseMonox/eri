@@ -33,7 +33,7 @@ def test_migration_v4_to_v5_maps_meds(tmp_path):
     conn.commit(); conn.close()
 
     c = db.init_db(p)
-    assert c.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert c.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
     rt = dict(c.execute("SELECT * FROM routines WHERE id=7").fetchone())
     assert rt["name"] == "降压药" and rt["category"] == "med" and "10mg" in rt["detail"]
     inst = [dict(r) for r in c.execute("SELECT * FROM reminders WHERE kind='routine' ORDER BY due_at")]
@@ -69,81 +69,6 @@ def test_routine_instance_flow(fresh_db):
     assert routines.latest_open() is not None
 
 
-def test_memory_crud_expiry_and_guard(fresh_db):
-    clock.set_override(T0)
-    m1 = memories.add("preference", "毎週水曜はジムに行く")
-    m2 = memories.add("schedule", "8/20 14:00 面接", valid_until=clock.iso(T0 + timedelta(days=4)))
-    m3 = memories.add("mood", "最近ちょっと疲れ気味")
-    assert m3["valid_until"] is not None                          # mood 默认 7 天
-    assert len(memories.list_active()) == 3
-    assert "毎週水曜" in memories.context_block()
-
-    # apply_ops:幻觉 id 忽略;schedule 无日期拒收;update/remove 生效
-    n = memories.apply_ops({
-        "add": [{"kind": "schedule", "text": "无日期的安排"},               # 拒收
-                {"kind": "fact", "text": "2028卒で就活中"}],
-        "update": [{"id": m1["id"], "text": "毎週火曜と木曜はジムに行く"}, {"id": 9999, "text": "x"}],
-        "remove": [m2["id"], 8888],
-    })
-    assert n == {"add": 1, "update": 1, "remove": 1}
-    assert memories.get(m1["id"])["text"].startswith("毎週火曜")
-    assert memories.get(m2["id"])["active"] == 0
-
-    # 过期自动失效
-    _advance(8 * 24 * 60)
-    assert all(m["kind"] != "mood" for m in memories.list_active())
-
-
-async def test_nightly_cleanup_expires(fresh_db, monkeypatch):
-    clock.set_override(T0)
-    memories.add("schedule", "昨日の予定", valid_until=clock.iso(T0 - timedelta(hours=1)))
-    memories.add("fact", "長期の事実")
-
-    async def no_llm(*a, **k):
-        return None
-
-    from app.llm import base as llm
-
-    monkeypatch.setattr(llm, "complete", no_llm)
-    n = await memories.nightly_cleanup()
-    assert n["expired"] == 1
-    assert [m["text"] for m in memories.list_active()] == ["長期の事実"]
-
-
-async def test_conversation_forget_and_memory_maintenance(fresh_db, monkeypatch):
-    clock.set_override(T0)
-    m = memories.add("preference", "朝は催促されたくない")
-    systems = []
-    steps = iter([
-        {"role": "assistant", "content": "", "tool_calls": [{
-            "id": "c0", "type": "function",
-            "function": {"name": "forget_memory", "arguments": json.dumps({"memory_id": m["id"]})}}]},
-        {"role": "assistant", "content": "忘れたよ、もう言わないね"},
-    ])
-
-    async def fake_chat(messages, tools=None, timeout=45):
-        systems.append(messages[0]["content"])
-        return next(steps)
-
-    async def fake_complete(prompt, system="", timeout=45):
-        assert "记忆管理器" in system                 # 记忆维护仍走单轮 complete
-        return json.dumps({"add": [{"kind": "fact", "text": "健身房はサクラフィット"}], "update": [], "remove": []})
-
-    from app.llm import base as llm
-
-    monkeypatch.setattr(llm, "chat", fake_chat)
-    monkeypatch.setattr(llm, "complete", fake_complete)
-    res = await conversation.handle("那个别记了", via="siri")
-    assert res["ok"] and "忘れた" in res["reply"]
-    assert "朝は催促されたくない" in systems[0]          # 记忆注入进系统上下文
-    assert memories.get(m["id"])["active"] == 0
-    # 异步维护任务跑完
-    import asyncio
-
-    await asyncio.sleep(0.05)
-    assert any(x["text"] == "健身房はサクラフィット" for x in memories.list_active())
-
-
 def test_recent_chat_budget(fresh_db):
     clock.set_override(T0)
     store.set("chat.context_budget_tokens", 60)
@@ -151,24 +76,13 @@ def test_recent_chat_budget(fresh_db):
         conversation._log("siri", "user", "あ" * 20)          # 每条 ≈21 token
     picked = conversation._recent_chat()
     assert 0 < len(picked) <= 3                                # 预算内截断
-    # 3 天前的不进
+    # 窗口 = 昨天 04:00 起 ∪ 还没整理进记忆的:4 天前但没整理的仍在(整理失败也不丢),整理过的才出窗口
     conn = db.get_db()
     conn.execute("UPDATE chat_log SET ts=?", (clock.iso(T0 - timedelta(days=4)),))
     conn.commit()
+    assert len(conversation._recent_chat()) > 0
+    store.set("memory.watermark", conn.execute("SELECT MAX(id) FROM chat_log").fetchone()[0])
     assert conversation._recent_chat() == []
-
-
-def test_apply_ops_rejects_mass_removal(fresh_db):
-    """一批 LLM 输出想删掉大部分记忆 → 整批拒绝(防坏输出清空)。"""
-    clock.set_override(T0)
-    ids = [memories.add("fact", f"事实{i}")["id"] for i in range(6)]
-    n = memories.apply_ops({"remove": ids})
-    assert n.get("rejected") is True and len(memories.list_active()) == 6
-    # 小规模 remove 正常执行
-    n2 = memories.apply_ops({"remove": ids[:2]})
-    assert n2["remove"] == 2 and len(memories.list_active()) == 4
-    # 可恢复
-    assert memories.reactivate(ids[0]) is True and len(memories.list_active()) == 5
 
 
 def test_routine_two_schedules_independent(fresh_db):
@@ -193,14 +107,3 @@ def test_routine_skip_accepts_missed(fresh_db):
     assert reminders.get(inst["id"])["status"] == "missed"
     row = routines.skip(inst["id"], via="siri")
     assert row["status"] == "dismissed"
-
-
-def test_context_block_priority_and_budget(fresh_db):
-    clock.set_override(T0)
-    store.set("memory.context_budget_tokens", 60)
-    memories.add("fact", "長い事実" * 5)
-    memories.add("schedule", "8/20 面接", valid_until=clock.iso(T0 + timedelta(days=4)))
-    memories.add("preference", "夜型")
-    block = memories.context_block()
-    assert "面接" in block                      # schedule 优先注入
-    assert block.index("面接") < block.index("夜型") if "夜型" in block else True

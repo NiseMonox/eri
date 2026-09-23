@@ -1,0 +1,17 @@
+# 本地向量模型(长期记忆 RAG 用):bge-m3,多语言,中日文互查都行,CPU 就够。
+# 启动:docker compose up -d && docker exec ollama ollama pull bge-m3
+# 健康检查:curl -s 127.0.0.1:11434/api/embed -d '{"model":"bge-m3","input":["テスト"]}' | head -c 120
+services:
+  ollama:
+    image: ollama/ollama:0.34.3
+    container_name: ollama
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - ./ollama-data:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=-1          # 模型常驻内存(bge-m3 约 1.2GB),免得冷加载拖慢对话
+      - OLLAMA_MAX_LOADED_MODELS=1
+    cpus: 4
+    mem_limit: 3g

@@ -8,7 +8,7 @@ from ..audio import tts
 from ..audio.manager import audio_manager
 from ..config import settings
 from ..notify.service import notify
-from ..services import memories, reminders, routines, weights
+from ..services import reminders, routines, weights
 
 
 async def run_schedule(schedule_id: int, force: bool = False) -> None:
@@ -208,11 +208,14 @@ async def reminder_sweeper() -> None:
         events.log("sweeper_error", {"job": "reminder_sweeper", "error": str(e)})
 
 
-async def memory_cleanup() -> None:
+async def memory_consolidate() -> None:
+    """04:00:把前一天的对话整理进长期记忆库(memory.enabled 关着时内部直接跳过)。"""
     try:
-        await memories.nightly_cleanup()
+        from ..services import consolidate
+
+        await consolidate.run()
     except Exception as e:  # noqa: BLE001
-        events.log("memory_error", {"job": "memory_cleanup", "error": str(e)[:200]})
+        events.log("memory_error", {"job": "memory_consolidate", "error": str(e)[:200]})
 
 
 async def daily_backup() -> None:

@@ -5,14 +5,15 @@ from .. import events, store
 from . import deepseek
 
 
-async def chat(messages: list[dict], tools: list[dict] | None = None,
-               timeout: int = 45) -> dict | None:
+async def chat(messages: list[dict], tools: list[dict] | None = None, timeout: int = 45,
+               model: str | None = None, response_format: dict | None = None) -> dict | None:
     """多轮 + 工具调用:返回 assistant message(content / tool_calls / reasoning_content);
     provider=off、未配置或出错时返回 None(调用方必须有无 LLM 的降级路径)。"""
     if store.get("llm.provider", "deepseek") == "off":
         return None
     try:
-        msg = await deepseek.chat(messages, tools, timeout=timeout)
+        msg = await deepseek.chat(messages, tools, timeout=timeout, model=model,
+                                  response_format=response_format)
         events.log("llm_call", {"provider": "deepseek",
                                 "prompt_head": str(messages[-1].get("content"))[:80],
                                 "tools": [c["function"]["name"] for c in msg.get("tool_calls") or []]})

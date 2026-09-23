@@ -59,8 +59,10 @@ async def lifespan(app: FastAPI):
         core.start()
         await bot_runner.start()
         from .audio import tts
+        from .llm import embed
 
         asyncio.get_running_loop().create_task(tts.prewarm())
+        asyncio.get_running_loop().create_task(embed.prewarm())   # bge-m3 冷加载 ~1.6s,别让第一句话超时
     yield
     await bot_runner.stop()
     core.shutdown()
