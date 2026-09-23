@@ -1,0 +1,18 @@
+# 自训音色(Style-Bert-VITS2 → .aivmx)的 TTS 引擎,VOICEVOX 兼容 API,代码不用改。
+# 准备:模型放 aivisspeech-data/Models/,目录属主改成 1000:1000(容器内以 uid 1000 运行,入口脚本不修权限)
+#   mkdir -p aivisspeech-data/Models && cp <模型>.aivmx aivisspeech-data/Models/ && chown -R 1000:1000 aivisspeech-data
+# 启动:docker compose up -d(首次下载 BERT 约 650MB + 两个默认模型,需要外网;日志出现 Application startup complete 即就绪)
+# 切换:设置页 tts.engine_url=http://127.0.0.1:10101,tts.speaker=<GET /speakers 里的 style id>
+services:
+  aivisspeech:
+    image: ghcr.io/aivis-project/aivisspeech-engine:cpu-1.2.0   # 锁版本:cpu-latest 不一定是 1.2.0
+    container_name: aivisspeech
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:10101:10101"     # 带模型安装/删除接口,只给本机
+    volumes:
+      - ./aivisspeech-data:/home/user/.local/share/AivisSpeech-Engine-Dev   # 容器内路径带 -Dev(官方要求)
+    # 必须复刻镜像完整 CMD 再追加参数(entrypoint 是 exec "$@");
+    # --disable_sentry:出错日志里可能有提醒原文,不发给 Sentry
+    command: ["gosu", "user", ".venv/bin/python", "./run.py", "--host", "0.0.0.0", "--disable_sentry"]
+    mem_limit: 4g                   # 实测 BERT + 一个模型常驻约 2.3GB;超了只杀引擎,不拖累主服务

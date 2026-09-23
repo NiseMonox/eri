@@ -1,4 +1,4 @@
-"""TTS 播报层:VOICEVOX(ずんだもん)合成 + 缓存 + 静音时段 + 中文标题 LLM 转日语。
+"""TTS 播报层:VOICEVOX 兼容引擎(VOICEVOX / AivisSpeech)合成 + 缓存 + 静音时段 + 中文标题 LLM 转日语。
 全链 fail-soft:任何失败只写 event_log,绝不影响 Bark/核心提醒。"""
 
 import asyncio
@@ -90,7 +90,7 @@ def _cache_path(ja_text: str, speaker: int) -> Path:
 
 
 async def synth(ja_text: str) -> Path:
-    """VOICEVOX 合成(带缓存,2 次重试)。失败抛异常,由 announce 兜底。"""
+    """TTS 引擎合成(带缓存,2 次重试)。失败抛异常,由 announce 兜底。"""
     speaker = int(store.get("tts.speaker", 3) or 3)
     engine = (store.get("tts.engine_url", "http://127.0.0.1:50021") or "").rstrip("/")
     path = _cache_path(ja_text, speaker)
@@ -112,7 +112,7 @@ async def synth(ja_text: str) -> Path:
         except Exception as e:  # noqa: BLE001
             last_err = e
             await asyncio.sleep(0.5)
-    raise RuntimeError(f"VOICEVOX 合成失败: {last_err}")
+    raise RuntimeError(f"TTS 合成失败({engine}): {last_err}")
 
 
 async def announce(text: str, *, force: bool = False) -> bool:

@@ -456,7 +456,7 @@ async def settings_tts_test(request: Request, text: str = Form("こんにちは�
         return _back(request, "/settings", msg="再生したよ。スピーカーを聞いてね")
     alive = await tts.engine_alive()
     return _back(request, "/settings",
-                 err="再生失敗:" + ("TTSがオフか合成エラーだよ(イベントログ参照)" if alive else "VOICEVOXエンジンがオフラインだよ"))
+                 err="再生失敗:" + ("TTSがオフか合成エラーだよ(イベントログ参照)" if alive else "音声合成エンジンがオフラインだよ"))
 
 
 @router.post("/settings/test-notify")

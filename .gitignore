@@ -9,6 +9,8 @@ __pycache__/
 deploy/bark/bark-data/
 media/*.wav
 deploy/ollama/ollama-data/
+# 自训音色模型(.aivmx)与引擎下载的 BERT:体积大且不得公开分发
+deploy/aivisspeech/aivisspeech-data/
 
 # 个人环境信息:只留在本机,不进仓库(公开仓库)
 deploy/notes.md

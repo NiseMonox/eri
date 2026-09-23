@@ -6,7 +6,7 @@
 ## 能做什么
 
 - 🌙 **音频**:晚间助眠音循环、早晨渐强闹钟(mpv + ALSA,网页实时调音量)
-- 🔊 **语音播报**:服药 / 提醒 / 记体重到点用ずんだもん音色播报;闹钟停止后报时+今日待办;静音时段自动闭嘴
+- 🔊 **语音播报**:服药 / 提醒 / 记体重到点用音箱播报(默认ずんだもん,可换成 Style-Bert-VITS2 自训音色);闹钟停止后报时+今日待办;静音时段自动闭嘴
 - 💬 **对话式秘书**:说什么她都像聊天一样回你,同时自动识别意图、调用功能(记体重、建提醒、改期/完成/取消、看待办、曲线、周报),一句话里几件事一起办;「手头有点事,下午再去」→ 自动改期并再催;无回应自动追催到底
 - 💊 **服药闭环**:提醒 → 点按/语音/按钮确认 → 未确认自动重发 → 超时标漏服(可补确认)
 - ⚖️ **体重与体成分**:Withings 秤全自动同步(体重 + 体脂/肌肉/骨量/内脏脂肪/代谢年龄等 12 项),Siri/Telegram/网页手动记录,曲线图与 LLM 点评周报;称体重提醒(「体重」类 routine)当天称过就不响,上秤后一同步自动算完成、不用再点确认
@@ -20,7 +20,7 @@
 ## 技术栈
 
 Python 3.13 · FastAPI · APScheduler(croniter 单引擎)· SQLite(WAL,版本化原子迁移)· mpv ·
-VOICEVOX(Docker)· bark-server(Docker)· Ollama + bge-m3(Docker,记忆向量)· python-telegram-bot · matplotlib · numpy · Jinja2 + Chart.js。
+VOICEVOX / AivisSpeech(Docker)· bark-server(Docker)· Ollama + bge-m3(Docker,记忆向量)· python-telegram-bot · matplotlib · numpy · Jinja2 + Chart.js。
 单进程,零前端构建,时间表存 DB、网页改完即生效。
 
 ## 快速开始
@@ -32,6 +32,7 @@ bash scripts/gen_media.sh      # 生成白噪音/占位闹钟音
 cp .env.example .env           # 填 API_TOKEN 等
 cd deploy/bark && docker compose up -d && cd ../..      # Bark 推送服务
 cd deploy/voicevox && docker compose up -d && cd ../..  # 语音引擎(可选)
+cd deploy/aivisspeech && docker compose up -d && cd ../..  # 自训音色引擎(可选,放模型的步骤见 compose 注释)
 cd deploy/ollama && docker compose up -d && docker exec ollama ollama pull bge-m3 && cd ../..  # 记忆向量(可选,不开则不检索记忆)
 make deploy                    # systemd 上线(端口 8300)
 ```
@@ -46,7 +47,7 @@ make deploy                    # systemd 上线(端口 8300)
 app/
 ├── scheduler/    # schedules 表 → APScheduler(croniter),sweeper(服药重发/提醒追催)
 ├── services/     # weights / routines / reminders 实例化 / conversation 对话大脑 / memories 记忆库 + consolidate 每日整理 / intents / body_metrics
-├── audio/        # manager(会话/渐强/播报共存) / mpv_player / tts(VOICEVOX + 缓存 + 静音)
+├── audio/        # manager(会话/渐强/播报共存) / mpv_player / tts(VOICEVOX 兼容引擎 + 缓存 + 静音)
 ├── notify/       # Bark + Telegram 统一入口
 ├── bot/          # Telegram long-polling + 正则兜底(LLM 不可用时)
 ├── llm/          # DeepSeek API(模型在 /settings 改)+ embed(本地 Ollama 向量)

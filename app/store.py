@@ -16,7 +16,7 @@ EDITABLE_KEYS = {
     "withings.poll_minutes": 15,
     "tts.enabled": True,
     "tts.quiet": "23:00-08:00",       # 静音时段(跨午夜可),期间只发 Bark 不出声
-    "tts.engine_url": "http://127.0.0.1:50021",   # VOICEVOX 兼容引擎;将来换 AivisSpeech 自训音色改这里
+    "tts.engine_url": "http://127.0.0.1:50021",   # VOICEVOX 兼容引擎;自训音色走 AivisSpeech :10101(deploy/aivisspeech)
     "tts.speaker": 3,                 # 3=ずんだもん ノーマル,GET /speakers 枚举
     "tts.volume": 80,
     "tts.speak_replies": True,        # 对话确认(推迟/完成)也用音箱念出来
