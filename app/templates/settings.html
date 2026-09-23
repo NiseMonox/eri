@@ -37,6 +37,8 @@
       {% set HELP = {
         "audio.alsa_device": "サウンドカード直通後は \"alsa/plughw:CARD=...\"(コンテナ内 aplay -L で確認)。空 = デフォルト",
         "reminder.nag_defaults": "リマインダー・ルーティンの再送パラメータ。schedule の payload でタスクごとに上書きできる",
+        "voice.stt_url": "音声認識サービス eri-stt(make deploy-stt)。OpenAI 互換の /v1/audio/transcriptions なら差し替え可",
+        "voice.speak_telegram": "Telegram のボイスメッセージへの返事も家のスピーカーで読み上げる。外出中は false に",
       } %}
       <div class="kv">
         {% for k, v in values.items() %}

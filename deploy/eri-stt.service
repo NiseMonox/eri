@@ -1,0 +1,24 @@
+[Unit]
+Description=eri-stt (SenseVoice 语音识别,给 health-hub 的语音入口用)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/projects/health-hub
+Environment=TZ=Asia/Tokyo
+# 识别线程数;模型目录默认 data/models/…(scripts/fetch_stt_model.sh 下载),可用 STT_MODEL_DIR 改
+Environment=STT_THREADS=4
+ExecStart=/projects/health-hub/.venv/bin/uvicorn stt.server:app --host 127.0.0.1 --port 8310 --no-access-log
+Restart=on-failure
+RestartSec=5
+# 单独一个进程的意义:内存/CPU 失控只影响识别,不连累提醒主服务。
+# 实测常驻约 400MB、60 秒录音峰值约 630MB(2026-09),MemoryMax 取峰值的 2 倍多
+MemoryMax=1500M
+CPUQuota=400%
+Nice=5
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

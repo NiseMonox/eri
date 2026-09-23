@@ -115,15 +115,17 @@ async def synth(ja_text: str) -> Path:
     raise RuntimeError(f"TTS 合成失败({engine}): {last_err}")
 
 
-async def announce(text: str, *, force: bool = False) -> bool:
-    """播报一段(会自动转日语)。enabled/quiet 判定在此;force=True 跳过静音(闹钟报时用)。"""
+async def announce(text: str, *, force: bool = False, translate: bool = True) -> bool:
+    """播报一段(会自动转日语)。enabled/quiet 判定在此;force=True 跳过静音(闹钟报时、语音对话的回复用)。
+    translate=False:本来就是艾莉的日语回复,不走 ensure_ja(那是给提醒标题的,会多调一次 LLM 还永久进翻译缓存)。"""
     if not enabled():
         return False
     if not force and quiet_now():
         return False
     async with _announce_lock:
         try:
-            ja = emoji.strip(await ensure_ja(emoji.strip(text)))   # 引擎会把 emoji 念成名字
+            clean = emoji.strip(text)                                  # 引擎会把 emoji 念成名字
+            ja = emoji.strip(await ensure_ja(clean)) if translate else clean
             path = await synth(ja)
         except Exception as e:  # noqa: BLE001
             events.log("tts_error", {"error": str(e)[:200], "text": text[:60]})

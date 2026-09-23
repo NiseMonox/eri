@@ -50,6 +50,8 @@ async def _try_start() -> bool:
     app.add_handler(CallbackQueryHandler(handlers.on_callback))
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.UpdateType.MESSAGE, handlers.on_text))
+    app.add_handler(MessageHandler(
+        (filters.VOICE | filters.AUDIO) & filters.UpdateType.MESSAGE, handlers.on_voice))
     app.add_error_handler(_on_error)
     try:
         await app.initialize()

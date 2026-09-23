@@ -20,6 +20,10 @@ EDITABLE_KEYS = {
     "tts.speaker": 3,                 # 3=ずんだもん ノーマル,GET /speakers 枚举
     "tts.volume": 80,
     "tts.speak_replies": True,        # 对话确认(推迟/完成)也用音箱念出来
+    "voice.stt_url": "http://127.0.0.1:8310",   # 语音识别服务 eri-stt(stt/server.py,OpenAI 兼容接口)
+    "voice.max_sec": 60,               # 一句语音的时长上限(秒);Telegram 语音超过就婉拒、不下载
+    "voice.speak_telegram": True,      # Telegram 语音消息的回复也在家里音箱念(人在外面时可以关)
+    "voice.speak_max_chars": 120,      # 语音回复在音箱上最多念几个字,超出截断并提示「続きは画面を見てね」
     "reminder.nag_defaults": {"every_min": 30, "max": 3, "grace_min": 120},   # 提醒/routine 无回应追催
     "chat.context_budget_tokens": 3000,  # 对话原文注入上限(粗估 token;窗口 = 昨天 04:00 起 ∪ 还没整理的)
     "memory.enabled": True,            # 每天 04:00 把对话整理进长期记忆库(只管整理;注入/记住/忘掉不受影响)

@@ -1,4 +1,4 @@
-.PHONY: dev test media deploy restart logs
+.PHONY: dev test media deploy restart logs stt-model deploy-stt dev-stt logs-stt
 
 dev:
 	uv run uvicorn app.main:app --host 0.0.0.0 --port 8300 --reload
@@ -23,3 +23,21 @@ restart:
 
 logs:
 	journalctl -u health-hub -f
+
+# 语音识别进程 eri-stt(语音入口用;不装也不影响其他功能)
+stt-model:
+	bash scripts/fetch_stt_model.sh
+
+deploy-stt: stt-model
+	cp deploy/eri-stt.service /etc/systemd/system/eri-stt.service
+	if [ -d deploy/local/eri-stt.service.d ]; then \
+	  mkdir -p /etc/systemd/system/eri-stt.service.d && \
+	  cp deploy/local/eri-stt.service.d/*.conf /etc/systemd/system/eri-stt.service.d/; fi
+	systemctl daemon-reload
+	systemctl enable --now eri-stt
+
+dev-stt:
+	uv run uvicorn stt.server:app --host 127.0.0.1 --port 8310
+
+logs-stt:
+	journalctl -u eri-stt -f

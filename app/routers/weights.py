@@ -45,14 +45,15 @@ async def weight_stats(days: int = 7):
 
 @router.get("/weights/today")
 async def weights_today():
-    """给「体重→Apple 健康」快捷指令:只回今天手动系(manual/telegram/siri)的记录。
-    Withings/HAE 来源不含在内——那两路的健康写入由各自官方 App 负责,避免健康里重复。"""
+    """给「体重→Apple 健康」快捷指令:只回今天手动记的(网页/Telegram/Siri/语音入口…)。
+    Withings/HAE 来源不含在内——那两路的健康写入由各自官方 App 负责,避免健康里重复。
+    用排除法:手动的渠道会越加越多(voice-pc、voice-ios…),白名单会漏。"""
     rows = svc.recent_days(1)
     today = clock.now_local().date()
     out = []
     for r in rows:
         local = clock.to_local(clock.parse_iso(r["measured_at"]))
-        if local.date() == today and r["source"] in ("manual", "telegram", "siri"):
+        if local.date() == today and r["source"] not in ("withings", "hae"):
             out.append({"kg": r["weight_kg"], "when": local.strftime("%Y-%m-%d %H:%M")})
     return out
 

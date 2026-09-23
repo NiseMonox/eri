@@ -1,4 +1,4 @@
-"""对话层:自由文本的统一大脑。Telegram 与 Siri(/api/ingest/text)都走 handle()。
+"""对话层:自由文本的统一大脑。Telegram、Siri(/api/ingest/text)和语音入口(services/voice.py)都走 handle()。
 每句话都交给 LLM(function calling):像聊天一样回复,同时按意图自动调用工具——一句话里几件事就调几个。
 工具 = 下面 _execute 的既有动作(id 验明正身、时间校验都在那里),LLM 看到执行结果再用艾莉口吻回复。
 LLM 关闭/不可用时降级到正则快路径(模板回复),核心记录照常。
@@ -20,7 +20,7 @@ SYSTEM = """你是「艾莉」(エリ),用户家里的 AI 助手兼健康秘书:
 
 【消息结构】
 - 这条系统消息末尾的【核心档案】是关于用户最重要的长期信息
-- 每轮最后一条消息 = 系统注入的【当前状态】(时间、开放事项、今后的提醒、ルーティン、身体数据)+【近日の予定】【相关记忆】(从长期记忆库按时间/按这句话取出,带日期,旧的可能已过时)+【ユーザーの発言】(用户这次真正说的话)
+- 每轮最后一条消息 = 系统注入的【当前状态】(时间、开放事项、今后的提醒、ルーティン、身体数据、スピーカー=家里音箱正在放什么)+【近日の予定】【相关记忆】(从长期记忆库按时间/按这句话取出,带日期,旧的可能已过时)+【ユーザーの発言】(用户这次真正说的话)
 - 历史消息里用户话前的 [MM/DD HH:MM] 是发送时间,艾莉话前的〔実行済み: …〕是系统记下的已执行操作;你的回复里不要写这两种标注
 
 【说话方式】
@@ -31,7 +31,7 @@ SYSTEM = """你是「艾莉」(エリ),用户家里的 AI 助手兼健康秘书:
 - 只依据上面这些信息和工具返回的结果说话:不编数据,没执行成功的事不能说做了;记忆和对话记录冲突时以对话记录为准
 
 【工具】
-- 话里有能用工具办的事(记体重、建提醒、设重复提醒、推迟/改期、完成、取消、记住、忘掉、查记忆、看今日待办、体重曲线、周报)就直接调用,不用先征求同意;一句话里有几件事就调几个
+- 话里有能用工具办的事(记体重、建提醒、设重复提醒、推迟/改期、完成、取消、记住、忘掉、查记忆、看今日待办、体重曲线、周报、停闹钟/放白噪音/调音量)就直接调用,不用先征求同意;一句话里有几件事就调几个
 - 纯聊天、问身体数据(用【身体数据】的数字答)、问「你记得我什么」(用【核心档案】【相关记忆】答)时不调工具,直接回复
 - reminder_id 只能取自【开放事项】或【今后的提醒】,routine_id 只能取自【ルーティン】,memory_id 只能取自【核心档案】【近日の予定】【相关记忆】或 search_memory 的结果;对不上号时别猜,问清楚
 - 时间一律东京时间 yyyy-MM-dd HH:mm,按当前时间换算:「下午」=14:00、「晚上」=20:00、「待会/过会」=+1 小时;只说了钟点而今天这个钟点已过,就当明天
@@ -39,11 +39,15 @@ SYSTEM = """你是「艾莉」(エリ),用户家里的 AI 助手兼健康秘书:
 - 用户说做完了:【开放事项】里有对应项用 mark_done,没有(比如提醒之前就做了)用 record_routine_done;说的是过去的事(「昨晚其实做了」)就把实际时刻填进 done_at
 - 报了体重数字就只调 record_weight:量体重的 routine 会自动完成,不用再对它 mark_done / record_routine_done
 - 用户明确说「记住…」才用 remember(日常对话不用,每天夜里会自动整理进记忆);问到过去的事而上面找不到时才用 search_memory(query 用日语;问某一天就给日期)
+- 家里音箱用 control_audio:停掉正在响的闹钟/白噪音、放白噪音、调正在放的声音的音量;「小声点/大声点」= 在【スピーカー】的当前音量上减/加 10-20;没在放东西时说的音量指艾莉自己说话的声音(set_voice_volume)
 - 工具返回 ok=false 时照实说明原因,需要的话问清楚"""
 
-SIRI_NOTE = "\n\n这条消息来自 Siri 语音,回复会被朗读:不要用列表和符号,说得口语一点。"
+# 语音入口和 Siri 的消息末尾加这段(放在最后一条消息里,不影响前缀缓存)
+VOICE_NOTE = ("\n\n这条消息来自语音(语音识别转写,可能有同音错字或中日混杂),回复会被朗读:"
+              "按最合理的意思理解,拿不准的数字和时间简短确认一下;不要用列表和符号,说得口语一点。")
 RE_ACTION_TAG = re.compile(r"〔実行済み[^〕]*〕\s*")   # 模型偶尔学着历史写标注,回复里删掉
 FALLBACK_REPLY = "ごめん、いま頭がうまく回らないみたい。「62.5」で体重記録、「薬飲んだ」で服薬確認はできるよ"
+FALLBACK_REPLY_VOICE = "ごめん、いま頭がうまく回らないみたい。体重の数字と「薬飲んだ」なら、今でも記録できるよ"
 MAX_ROUNDS = 4          # 一句话最多几轮「调工具 → 看结果」
 
 
@@ -110,25 +114,43 @@ TOOLS = [
           {"query": {"type": ["string", "null"], "description": "用日语写的检索语句;只按日期查时为 null"},
            "date_from": {"type": ["string", "null"], "description": "yyyy-MM-dd"},
            "date_to": {"type": ["string", "null"], "description": "yyyy-MM-dd"}}),
+    _tool("control_audio",
+          "操作家里的音箱:stop=停掉正在响的闹钟/白噪音;play_noise=放白噪音;set_volume=调正在放的声音的音量;"
+          "set_voice_volume=调艾莉自己说话的音量。只管现在的播放,改不了闹钟的定时",
+          {"op": {"type": "string", "enum": ["stop", "play_noise", "set_volume", "set_voice_volume"]},
+           "preset": {"type": "string", "enum": ["brown", "pink"], "description": "play_noise 的音色,默认 brown"},
+           "volume": {"type": ["integer", "null"], "description": "0-100;play_noise 不说就 null(=40)"},
+           "duration_min": {"type": ["integer", "null"],
+                            "description": "play_noise 放多少分钟;不说就 null(=60)"}},
+          ["op"]),
 ]
 # 工具名 → _execute 的动作名
 TOOL_ACTIONS = {"record_weight": "weight", "create_reminder": "reminder", "snooze": "snooze",
                 "mark_done": "done", "dismiss": "dismiss", "forget_memory": "forget",
                 "show_today": "today", "weight_chart": "chart", "weekly_report": "report",
                 "set_recurring": "recurring", "stop_recurring": "stop_recurring",
-                "record_routine_done": "routine_record", "remember": "remember", "search_memory": "search_memory"}
-# 这些工具的结果不写进 chat_log.actions(不是需要记住的事实),只记工具名
-READ_ONLY_TOOLS = {"show_today", "weight_chart", "weekly_report", "search_memory", "today", "chart", "report"}
+                "record_routine_done": "routine_record", "remember": "remember", "search_memory": "search_memory",
+                "control_audio": "audio"}
+# 这些工具的结果不写进 chat_log.actions(不是需要记住的事实),只记工具名。
+# 音箱操作是一时的,也不该被夜间整理当成「用户的事」记进长期记忆
+READ_ONLY_TOOLS = {"show_today", "weight_chart", "weekly_report", "search_memory", "today", "chart", "report",
+                   "control_audio", "audio_stop"}
 
 STANDARD_INTENTS = {"weight", "reminder", "today", "chart", "report"}
 
 
 @dataclass
 class TurnCtx:
-    """一轮对话内工具共享的状态:本轮 LLM 看得到的记忆 id(forget 只能动这些)、执行过的操作(写进 chat_log.actions)。"""
+    """一轮对话内工具共享的状态:本轮 LLM 看得到的记忆 id(forget 只能动这些)、执行过的操作(写进 chat_log.actions)。
+    语音轮:voice=这句话是说出来的(工具不再各自播报确认,只念最后的回复);reply_spoken=回复会在家里音箱念;
+    briefing=停了闹钟、早安播报会代替回复念出来;after_speech=回复念完再开始放的音频(白噪音)。"""
     visible: set = field(default_factory=set)
     actions: list = field(default_factory=list)
     remembered: int = 0
+    voice: bool = False
+    reply_spoken: bool = False
+    briefing: bool = False
+    after_speech: list = field(default_factory=list)
 
 
 def _log(via: str, role: str, text: str, *, ts: str | None = None, actions: list | None = None) -> None:
@@ -209,7 +231,26 @@ def _context() -> str:
     if act:
         lines.append(f"【活動】(Apple Watch)最新 {act}")
 
+    lines.append(_speaker_line())
     return "\n".join(lines)
+
+
+def _speaker_line() -> str:
+    """家里音箱现在的状态,LLM 靠它处理「停下」「小声点」。不暴露文件路径。"""
+    from ..audio.manager import audio_manager
+
+    st = audio_manager.status()
+    voice_vol = f"エリの声 {int(store.get('tts.volume', 80) or 80)}"
+    if st.get("action") == "announce":
+        paused = f"({st['paused_label']}は一時停止中、音量{st['paused_volume']})" if st.get("paused") else ""
+        return f"【スピーカー】エリが話し中{paused} / {voice_vol}"
+    if not st.get("playing"):
+        return f"【スピーカー】何も再生していない / {voice_vol}"
+    parts = [f"{st.get('label') or st.get('action')}再生中", f"音量{st.get('target_volume')}"]
+    if st.get("ends_at"):
+        left = (clock.parse_iso(st["ends_at"]) - clock.now_utc()).total_seconds() / 60
+        parts.append(f"あと{max(1, round(left))}分で自動停止")
+    return "【スピーカー】" + "・".join(parts) + f" / {voice_vol}"
 
 
 def _history() -> tuple[list[dict], int | None]:
@@ -247,22 +288,25 @@ async def _related(text: str, first_id: int | None) -> list[dict]:
     return rows
 
 
-def _turn_message(text: str, via: str, arrived: str, upcoming: str, related: list[dict]) -> str:
+def _turn_message(text: str, via: str, arrived: str, upcoming: str, related: list[dict],
+                  voice: bool = False) -> str:
     parts = ["【当前状态】\n" + _context(), upcoming, memories.related_block(related),
              f"【ユーザーの発言】[{clock.fmt_local(arrived, '%m/%d %H:%M')}] {text}"]
-    return "\n\n".join(p for p in parts if p) + (SIRI_NOTE if via == "siri" else "")
+    return "\n\n".join(p for p in parts if p) + (VOICE_NOTE if voice or via == "siri" else "")
 
 
-async def handle(text: str, via: str) -> dict:
-    """返回 {"ok", "reply", "photo"}。"""
+async def handle(text: str, via: str, *, voice: bool = False, reply_spoken: bool = False) -> dict:
+    """返回 {"ok", "reply", "photo", "briefing", "after_speech"}。
+    voice=语音入口(识别出来的话;工具不各自播报确认),reply_spoken=调用方会在家里音箱念 reply。"""
     arrived = clock.now_iso()
     text = text.strip()
-    ctx = TurnCtx()
+    ctx = TurnCtx(voice=voice, reply_spoken=reply_spoken)
     res = await _agent(text, via, arrived, ctx)
     if res is None:
-        # LLM 关闭/不可用:能被正则认出的(体重/服药/今日/图表/周报)照样执行,核心记录不断
+        # LLM 关闭/不可用:能被正则认出的(体重/服药/今日/图表/周报/停下)照样执行,核心记录不断
         fast = parser.parse_regex(text)
-        res = await _execute(fast, text, via, ctx) if fast else _r(False, FALLBACK_REPLY)
+        res = (await _execute(fast, text, via, ctx) if fast
+               else _r(False, FALLBACK_REPLY_VOICE if voice else FALLBACK_REPLY))
         if fast:
             _note_action(ctx, fast.get("intent", "?"), res)
     res["reply"] = RE_ACTION_TAG.sub("", res["reply"]).strip() or res["reply"]
@@ -270,6 +314,8 @@ async def handle(text: str, via: str) -> dict:
     res["reply"] = emoji.strip(res["reply"]) or "了解だよ"
     _log(via, "user", text, ts=arrived)
     _log(via, "assistant", res["reply"], actions=ctx.actions)
+    res["briefing"] = ctx.briefing
+    res["after_speech"] = list(ctx.after_speech)
     return res
 
 
@@ -284,7 +330,7 @@ async def _agent(text: str, via: str, arrived: str, ctx: TurnCtx) -> dict | None
     ctx.visible |= core_ids | up_ids | {r["id"] for r in related}
     messages = [{"role": "system", "content": SYSTEM + (f"\n\n{core_text}" if core_text else "")},
                 *history,
-                {"role": "user", "content": _turn_message(text, via, arrived, upcoming, related)}]
+                {"role": "user", "content": _turn_message(text, via, arrived, upcoming, related, ctx.voice)}]
     done: list[dict] = []
     for _ in range(MAX_ROUNDS):
         msg = await llm.chat(messages, tools=TOOLS, timeout=30)
@@ -351,9 +397,10 @@ async def _execute(action: dict, user_text: str, via: str, ctx: TurnCtx | None =
         if inst is None:
             return _r(True, "いま確認待ちのお薬はないよ" if cat == "med" else "いま確認待ちのルーティンはないよ")
         row = routines.complete(inst["id"], via=via)
-        from ..audio import tts
+        if not _voice(ctx):
+            from ..audio import tts
 
-        await tts.announce_done(row["title"])
+            await tts.announce_done(row["title"])
         return _r(True, f"{row['title']}、完了だよ({clock.fmt_local(row['done_at'], '%H:%M')})")
 
     # LLM 给的 id 一律先对【开放事项】/【今后的提醒】/【长期记忆】验明正身
@@ -378,9 +425,10 @@ async def _execute(action: dict, user_text: str, via: str, ctx: TurnCtx | None =
             return _r(False, "延ばす対象が見つからなかったよ")
         t_local = clock.to_local(clock.parse_iso(row["due_at"]))
         when = t_local.strftime("%H:%M" if t_local.date() == clock.now_local().date() else "%m/%d %H:%M")
-        from ..audio import tts
+        if not _voice(ctx):
+            from ..audio import tts
 
-        await tts.announce_snoozed(row["title"], t_local)
+            await tts.announce_snoozed(row["title"], t_local)
         return _r(True, f"OK、「{row['title']}」は {when} にまた声かけるね")
 
     if kind == "done":
@@ -395,9 +443,10 @@ async def _execute(action: dict, user_text: str, via: str, ctx: TurnCtx | None =
             row = reminders.set_status(rid, "done")
         if row is None or row["status"] != "done":
             return _r(False, "その件が見つからなかったよ")
-        from ..audio import tts
+        if not _voice(ctx):
+            from ..audio import tts
 
-        await tts.announce_done(row["title"])
+            await tts.announce_done(row["title"])
         return _r(True, f"記録したよ:「{row['title']}」完了")
 
     if kind == "dismiss":
@@ -445,10 +494,14 @@ async def _execute(action: dict, user_text: str, via: str, ctx: TurnCtx | None =
             row = routines.record_done(routine["id"], via=via, done_at=_past_time(action.get("done_at")))
         except ValueError as e:
             return _r(False, str(e))
-        from ..audio import tts
+        if not _voice(ctx):
+            from ..audio import tts
 
-        await tts.announce_done(row["title"])
+            await tts.announce_done(row["title"])
         return _r(True, f"「{routine['name']}」完了を記録したよ" + _next_line(routine["id"]))
+
+    if kind in ("audio", "audio_stop"):     # audio_stop = 正则快路径的「止めて」
+        return await _control_audio({"op": "stop"} if kind == "audio_stop" else action, ctx)
 
     if kind in STANDARD_INTENTS:
         payload = dict(action)
@@ -460,6 +513,78 @@ async def _execute(action: dict, user_text: str, via: str, ctx: TurnCtx | None =
 
 def _r(ok: bool, reply: str) -> dict:
     return {"ok": ok, "reply": reply, "photo": None}
+
+
+def _voice(ctx: TurnCtx | None) -> bool:
+    """语音轮只念最后那段回复:工具自己的播报确认(「えらい!…完了だよ」)不再单独念。
+    人不在家(speak=false)时也一样,家里保持安静。"""
+    return ctx is not None and ctx.voice
+
+
+def _clamp(v, lo: int, hi: int, default: int | None) -> int | None:
+    try:
+        return max(lo, min(hi, int(v)))
+    except (TypeError, ValueError):
+        return default
+
+
+_AUDIO_JA = {"alarm": "アラーム", "white_noise": "ホワイトノイズ", "file": "音声"}
+_NOISE_JA = {"brown": "ブラウン", "pink": "ピンク"}
+
+
+async def _control_audio(action: dict, ctx: TurnCtx | None) -> dict:
+    """家里音箱:停 / 放白噪音 / 调播放音量 / 调艾莉的声音。播报进行中时,停和调音量作用在被暂停的那个上。"""
+    from ..audio.manager import audio_manager
+
+    op = action.get("op")
+    st = audio_manager.status()
+    if op == "stop":
+        if st.get("action") == "announce":
+            was, label = st.get("paused"), st.get("paused_label")
+        else:
+            was, label = (st.get("action"), st.get("label")) if st.get("playing") else (None, None)
+        if not was:
+            return _r(True, "いまは何も鳴ってないよ")
+        # 和 Bark 的停止链接、网页按钮一样用 manual:停闹钟会触发早安播报(时刻+今日待办)。
+        # 例外是语音轮而家里不出声(speak=false,人不在家):那就安静地停
+        quiet = ctx is not None and ctx.voice and not ctx.reply_spoken
+        await audio_manager.stop(reason="remote" if quiet else "manual")
+        if was == "alarm" and not quiet:
+            if ctx is not None:
+                ctx.briefing = True
+            return _r(True, "アラームを止めたよ。今の時刻と今日の予定はスピーカーで読み上げるね")
+        return _r(True, f"{label or _AUDIO_JA.get(was, '音')}を止めたよ")
+
+    if op == "play_noise":
+        preset = action.get("preset") if action.get("preset") in _NOISE_JA else "brown"
+        vol = _clamp(action.get("volume"), 0, 100, 40)
+        minutes = _clamp(action.get("duration_min"), 1, 480, 60)
+        payload = {"action": "white_noise", "preset": preset, "volume": vol, "duration_min": minutes}
+        name = f"ホワイトノイズ({_NOISE_JA[preset]})"
+        if ctx is not None and ctx.reply_spoken:
+            # 回复要在音箱上念:先停掉现在的,念完再开始放,免得「响起来—被回复打断—再响」
+            await audio_manager.stop(reason="replaced")
+            ctx.after_speech.append(payload)
+            return _r(True, f"返事のあとで{name}を{minutes}分、音量{vol}で流すね")
+        await audio_manager.start(payload)
+        return _r(True, f"{name}を{minutes}分、音量{vol}で流し始めたよ")
+
+    if op == "set_volume":
+        vol = _clamp(action.get("volume"), 0, 100, None)
+        if vol is None:
+            return _r(False, "音量をいくつにするか分からなかったよ")
+        if await audio_manager.set_volume(vol) is None:
+            return _r(False, "いまは何も流れてないよ。わたしの声の大きさを変えたいなら、そう言ってね")
+        return _r(True, f"音量を{vol}にしたよ")
+
+    if op == "set_voice_volume":
+        vol = _clamp(action.get("volume"), 10, 100, None)
+        if vol is None:
+            return _r(False, "声の大きさをいくつにするか分からなかったよ")
+        store.set("tts.volume", vol)
+        return _r(True, f"わたしの声の大きさを{vol}にしたよ")
+
+    return _r(False, "音の操作が分からなかったよ")
 
 
 async def _remember(action: dict, ctx: TurnCtx | None) -> dict:

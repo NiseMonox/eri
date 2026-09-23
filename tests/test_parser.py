@@ -38,3 +38,20 @@ def test_simple_commands():
 def test_free_text_falls_through():
     assert parser.parse_regex("昨晚十点量的62.3") is None   # 交给 LLM
     assert parser.parse_regex("明早9点倒垃圾") is None
+
+
+def test_speech_recognition_output():
+    """语音识别会加句号、可能出全角数字;问号不去掉(「薬飲んだ?」是在问)。"""
+    assert parser.parse_regex("62.5キロ。")["weight_kg"] == 62.5
+    assert parser.parse_regex("６２．５")["weight_kg"] == 62.5
+    assert parser.parse_regex("薬飲んだ。") == {"intent": "med_confirm"}
+    assert parser.parse_regex("薬飲んだ？") is None
+    assert parser.parse_regex("今日。") == {"intent": "today"}
+
+
+def test_stop_audio():
+    for text in ("止めて", "アラーム止めて。", "アラームを止めてください", "ストップ", "关掉", "闹钟关了吧",
+                 "别响了", "Stop"):
+        assert parser.parse_regex(text) == {"intent": "audio_stop"}, text
+    for text in ("明日の朝アラームを止めて", "止めてほしいことがある", "关掉提醒"):   # 长句 / 别的东西交给 LLM
+        assert parser.parse_regex(text) is None, text

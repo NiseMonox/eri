@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from . import clock, db
+from . import bg, clock, db
 from .audio.manager import audio_manager
 from .config import settings
 from .bot import runner as bot_runner
@@ -21,6 +21,7 @@ from .routers import (
     routines,
     schedules,
     system,
+    voice,
     weights,
     withings,
 )
@@ -66,6 +67,7 @@ async def lifespan(app: FastAPI):
     yield
     await bot_runner.stop()
     core.shutdown()
+    await bg.drain(3)       # 正在念的语音回复等后台任务,给一点时间收尾
     await audio_manager.stop(reason="shutdown")
 
 
@@ -80,6 +82,7 @@ app.include_router(memories.router)
 app.include_router(reminders.router)
 app.include_router(audio.router)
 app.include_router(ingest.router)
+app.include_router(voice.router)
 app.include_router(withings.router)
 app.include_router(callbacks.router)
 app.include_router(pages.router)

@@ -15,6 +15,10 @@ dependencies = [
     "python-multipart>=0.0.9",
     "python-telegram-bot>=21",
     "numpy>=2",
+    # 语音识别进程 eri-stt(stt/server.py)用;app/ 不 import。sherpa-onnx 的 sdist 元数据漏了
+    # sherpa-onnx-core(带 libonnxruntime.so),uv 解析不到,所以两个包显式钉同一版本、一起升级
+    "sherpa-onnx==1.13.8",
+    "sherpa-onnx-core==1.13.8",
 ]
 
 [dependency-groups]
