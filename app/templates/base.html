@@ -1,27 +1,90 @@
+{#- 子模板在 block 外 {% set section = "..." %}(Jinja 会在渲染 layout 前执行),决定高亮的导航项与页头 -#}
+{%- set PAGES = {
+  "today":     {"href": "/",          "nav": "ホーム",       "title": "今日",         "en": "TODAY",    "icon": "i-today"},
+  "schedules": {"href": "/schedules", "nav": "スケジュール", "title": "スケジュール", "en": "SCHEDULE", "icon": "i-clock"},
+  "routines":  {"href": "/routines",  "nav": "ルーティン",   "title": "ルーティン",   "en": "ROUTINE",  "icon": "i-loop"},
+  "weights":   {"href": "/weights",   "nav": "体重",         "title": "体重",         "en": "WEIGHT",   "icon": "i-scale"},
+  "reminders": {"href": "/reminders", "nav": "リマインダー", "title": "リマインダー", "en": "REMINDER", "icon": "i-bell"},
+  "memories":  {"href": "/memories",  "nav": "メモリー",     "title": "メモリー",     "en": "MEMORY",   "icon": "i-chip"},
+  "settings":  {"href": "/settings",  "nav": "設定",         "title": "設定",         "en": "SETTINGS", "icon": "i-sliders"},
+} -%}
+{%- set P = PAGES.get(section) if section is defined else none -%}
+{%- set IDX = (PAGES | list).index(section) + 1 if P else 0 -%}
 <!doctype html>
-<html lang="zh">
+<html lang="ja">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{% block title %}Eri{% endblock %}</title>
-<link rel="stylesheet" href="/static/style.css">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1a1a1a" media="(prefers-color-scheme: dark)">
+<title>{% block title %}{% if P %}{{ P.title }} · {% endif %}Eri{% endblock %}</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="preload" href="/static/fonts/space-grotesk.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/static/style.css?v={{ asset_v('style.css') }}">
 </head>
 <body>
-<nav>
-  <span class="brand">✨ Eri · 艾莉</span>
-  <a href="/">ホーム</a>
-  <a href="/schedules">スケジュール</a>
-  <a href="/routines">ルーティン</a>
-  <a href="/weights">体重</a>
-  <a href="/reminders">リマインダー</a>
-  <a href="/memories">メモリー</a>
-  <a href="/settings">設定</a>
-  <a class="right" href="/logout">ログアウト</a>
-</nav>
-<main>
-{% if msg %}<div class="flash ok">{{ msg }}</div>{% endif %}
-{% if err %}<div class="flash bad">{{ err }}</div>{% endif %}
-{% block content %}{% endblock %}
-</main>
+{% include "_icons.html" %}
+{% if bare is defined and bare %}
+{% block solo %}{% endblock %}
+{% else %}
+<div class="shell">
+  <aside class="side">
+    <a class="logo" href="/" aria-label="Eri ホーム">
+      <span class="logo-ruby">HOME ASSISTANT</span>
+      <span class="logo-mark">ERI</span>
+      <span class="logo-sub"><b>エリ</b><i></i><em></em></span>
+    </a>
+    <nav class="nav">
+      {% for key, p in PAGES.items() %}
+      <a href="{{ p.href }}"{% if key == section %} class="on" aria-current="page"{% endif %}>
+        <svg class="ico" aria-hidden="true"><use href="#{{ p.icon }}"/></svg>
+        <span><span class="jp">{{ p.nav }}</span><span class="en">{{ p.en }}</span></span>
+      </a>
+      {% endfor %}
+    </nav>
+    <div class="side-foot">
+      <a class="side-btn" href="/logout" title="ログアウト"><svg class="ico" aria-hidden="true"><use href="#i-exit"/></svg><span>ログアウト</span></a>
+      <div class="side-clock">
+        <svg class="mark" aria-hidden="true"><use href="#i-mark"/></svg><span class="sep"></span>
+        <div><span class="t" data-clock="hm">{{ now().strftime("%H:%M") }}</span><span class="d" data-clock="date">{{ now().strftime("%Y.%m.%d %a") | upper }}</span></div>
+      </div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="content">
+      {% if P %}
+      <header class="phead">
+        <div class="hud">
+          <span class="idx">[ {{ "%02d" | format(IDX) }} ]</span><span>ERI // HOME ASSISTANT</span>
+          <span class="rule"></span><span class="clock" data-clock="full">{{ now().strftime("%Y.%m.%d %a %H:%M") | upper }} JST</span>
+        </div>
+        <div class="phead-bg" aria-hidden="true">{{ P.en }}</div>
+        <div class="ptitle">
+          <span class="pico"><svg class="ico" aria-hidden="true"><use href="#{{ P.icon }}"/></svg></span>
+          <h1><span class="br">[</span>{{ P.title }}<span class="br">]</span></h1>
+          <span class="en-tag">{{ P.en }}</span>
+        </div>
+        <div class="tri"><i></i><i></i><i></i><i></i></div>
+        {% if self.lead() | trim %}<p class="lead">{% block lead %}{% endblock %}</p>{% endif %}
+      </header>
+      {% endif %}
+
+      {% if msg %}<div class="flash ok" role="status"><b>OK</b><span>{{ msg }}</span></div>{% endif %}
+      {% if err %}<div class="flash bad" role="alert"><b>ERROR</b><span>{{ err }}</span></div>{% endif %}
+
+      {% block content %}{% endblock %}
+    </div>
+
+    <footer class="pfoot">
+      <div><div class="a">ERI: HOME ASSISTANT</div><div class="b">{{ P.en if P else "ERI" }}</div></div>
+      <div class="z"></div>
+      {% if P %}<div class="c">{{ "%02d" | format(IDX) }} / {{ "%02d" | format(PAGES | length) }}</div>{% endif %}
+    </footer>
+  </main>
+</div>
+{% endif %}
+<script src="/static/eri.js?v={{ asset_v('eri.js') }}"></script>
+{% block scripts %}{% endblock %}
 </body>
 </html>

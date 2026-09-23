@@ -21,9 +21,14 @@ from ..services import consolidate, memories, reminders, routines, weights
 from ..services import schedules as sched_svc
 
 router = APIRouter()
+STATIC = Path(__file__).parent.parent / "static"
 templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
 templates.env.filters["fmt_local"] = clock.fmt_local
 templates.env.filters["tojson_cn"] = lambda v: json.dumps(v, ensure_ascii=False)
+# ?v=<mtime>:静态文件一改,浏览器就换新的(否则会按启发式缓存拿旧 CSS 配新模板)
+templates.env.globals["asset_v"] = lambda name: int((STATIC / name).stat().st_mtime)
+templates.env.globals["now"] = clock.now_local
+templates.env.globals["ROUTINE_CATS"] = routines.CATEGORIES
 
 
 def _render(request: Request, name: str, **ctx):

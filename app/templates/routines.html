@@ -1,70 +1,94 @@
 {% extends "base.html" %}
-{% block title %}ルーティン - Eri{% endblock %}
+{% import "_ui.html" as ui %}
+{% set section = "routines" %}
+{% block lead %}毎日やること(お薬・運動・ケア・習慣)。「スケジュール」で routine タイプのタスクを作ると、定時に声かけ → 確認 → 催促 → 記録まで自動だよ。{% endblock %}
 {% block content %}
-<h1>ルーティン</h1>
-<p class="muted">毎日やること(お薬・運動・ケア・習慣)。「スケジュール」で routine タイプのタスクを作ると定時に声かけ→確認→催促→記録まで自動だよ。</p>
 
-<div class="card">
-  <h2 style="margin-top:0">直近12週</h2>
-  <div class="heat-wrap">
-    <table class="heat">
-      <tr><th></th>{% for d in days %}<th class="heat-day {% if loop.index0 % 7 == 0 %}wk{% endif %}" title="{{ d }}">{% if d[-2:] == "01" or loop.index0 == 0 %}<span>{{ d[5:7] }}/{{ d[8:] }}</span>{% endif %}</th>{% endfor %}</tr>
-      {% for r in routines if r.active %}
-      <tr>
-        <td class="heat-name">{{ r.icon }} {{ r.name }}
-          {% set c = rates.get(r.id) %}{% if c and c.total %}<span class="muted"> {{ c.done }}/{{ c.total }}</span>{% endif %}
-        </td>
-        {% for d in days %}{% set st = heat.get(r.id, {}).get(d) %}<td class="heat-cell {{ st or 'none' }}" title="{{ d }} {{ st or '' }}"></td>{% endfor %}
-      </tr>
-      {% endfor %}
+<section class="panel">
+  {{ ui.head("直近12週", "ACTIVITY MATRIX / 12 WEEKS") }}
+  <div class="pb">
+    {% set active = routines | selectattr("active") | list %}
+    {% if active %}
+    <div class="heat-wrap">
+      <table class="heat">
+        <tr><th></th>{% for d in days %}<th class="heat-day" title="{{ d }}">{% if d[-2:] == "01" or loop.first %}<span>{{ d[5:7] }}/{{ d[8:] }}</span>{% endif %}</th>{% endfor %}</tr>
+        {% for r in active %}
+        <tr>
+          <th class="heat-name">{{ r.name }}{% set c = rates.get(r.id) %}{% if c and c.total %}<span class="rate">{{ c.done }}/{{ c.total }}</span>{% endif %}</th>
+          {% for d in days %}{% set s = heat.get(r.id, {}).get(d) %}<td class="heat-cell {{ s or 'none' }}{{ ' today' if loop.last }}" title="{{ d }} {{ ui.ROUTINE_ST.get(s, '') }}"></td>{% endfor %}
+        </tr>
+        {% endfor %}
+      </table>
+    </div>
+    <div class="legend">
+      {{ ui.st("done") }}{{ ui.st("dismissed") }}{{ ui.st("missed") }}{{ ui.st("notified") }}
+      <span class="muted" style="margin-left:auto">右の数字 = 直近7日の完了 / 予定</span>
+    </div>
+    {% else %}
+    <div class="empty">有効なルーティンがないよ。</div>
+    {% endif %}
+  </div>
+</section>
+
+<section class="panel">
+  {{ ui.head("ルーティン一覧", "REGISTRY", routines | length ~ " 件") }}
+  <div class="tbl-wrap">
+    <table class="tbl">
+      <thead><tr><th>ID</th><th>名前</th><th>カテゴリ</th><th class="hide-sm">メモ</th><th>リマインド</th><th></th></tr></thead>
+      <tbody>
+        {% for r in routines %}
+        {% set p = plans.get(r.id) %}
+        <tr{% if not r.active %} class="dim"{% endif %}>
+          <td class="muted">{{ "%02d" | format(r.id) }}</td>
+          <td><b>{{ r.name }}</b>{% if not r.active %} <span class="tag h">無効</span>{% endif %}</td>
+          <td>{{ ui.cat(r.category) }}</td>
+          <td class="muted hide-sm">{{ r.detail or "" }}</td>
+          <td>{% if p %}{{ p[0] }}{% if p[1] %}<span class="sub">次回 {{ p[1].strftime("%m/%d %H:%M") }}</span>{% endif %}{% endif %}</td>
+          <td class="act"><form class="inline" method="post" action="/routines/{{ r.id }}/toggle"><button class="small">{{ "無効にする" if r.active else "有効にする" }}</button></form></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="muted">まだないよ。</td></tr>
+        {% endfor %}
+      </tbody>
     </table>
   </div>
-  <p class="muted" style="margin-top:6px"><span class="legend done"></span>完了 <span class="legend dismissed"></span>スキップ <span class="legend missed"></span>未実施 <span class="legend pending"></span>確認待ち</p>
-</div>
+  <div class="pb" style="border-top:1px solid var(--line-2)">
+    <form method="post" action="/routines/create">
+      <div class="fields">
+        <label class="field grow"><span>名前</span><input name="name" placeholder="例:ストレッチ" required></label>
+        <label class="field"><span>カテゴリ</span>
+          <select name="category">{% for k, v in categories.items() %}<option value="{{ k }}">{{ v.ja }}</option>{% endfor %}</select></label>
+        <label class="field grow"><span>メモ・用量</span><input name="detail" placeholder="例:10mg x1"></label>
+        <button class="primary">追加</button>
+      </div>
+    </form>
+    <p class="hint">追加したら「スケジュール」で routine タイプ(payload の routine_id に上の ID)を作ると定時にリマインドされるよ。エリに「ストレッチ、1日おきに夜9時に声かけて」みたいに話しかけても設定できる。</p>
+  </div>
+</section>
 
-<div class="card">
-  <table>
-    <tr><th>ID</th><th>名前</th><th>カテゴリ</th><th>メモ</th><th>リマインド</th><th></th></tr>
-    {% for r in routines %}
-    <tr {% if not r.active %}style="opacity:.5"{% endif %}>
-      <td>{{ r.id }}</td><td>{{ r.icon }} {{ r.name }}</td><td class="muted">{{ categories[r.category].ja if r.category in categories else r.category }}</td>
-      <td class="muted">{{ r.detail or "" }}</td>
-      <td class="muted">{% set p = plans.get(r.id) %}{% if p %}{{ p[0] }}{% if p[1] %}<br>次回 {{ p[1].strftime("%m/%d %H:%M") }}{% endif %}{% endif %}</td>
-      <td><form class="inline" method="post" action="/routines/{{ r.id }}/toggle"><button class="small">{{ "無効にする" if r.active else "有効にする" }}</button></form></td>
-    </tr>
-    {% endfor %}
-  </table>
-  <h2>ルーティンを追加</h2>
-  <form method="post" action="/routines/create">
-    <div class="formrow">
-      <input name="name" placeholder="名前(例: ストレッチ)" required>
-      <select name="category">
-        {% for k, v in categories.items() %}<option value="{{ k }}">{{ v.icon }} {{ v.ja }}</option>{% endfor %}
-      </select>
-      <input name="detail" placeholder="メモ・用量(例: 10mg x1)">
-      <button class="primary">追加</button>
-    </div>
-  </form>
-  <p class="muted">追加後、「スケジュール」で routine タイプ(payload の routine_id に上の ID)を作ると定時リマインドされるよ。エリに「ストレッチ、1日おきに夜9時に声かけて」みたいに話しかけても設定できるよ。</p>
-</div>
-
-<div class="card">
-  <h2 style="margin-top:0">最近の記録</h2>
-  <table>
-    <tr><th>予定</th><th>ルーティン</th><th>状態</th><th>完了時刻</th><th>経路</th><th></th></tr>
-    {% for i in instances %}
-    <tr>
-      <td>{{ i.due_at | fmt_local }}</td>
-      <td>{{ i.icon }} {{ i.routine_name }}</td>
-      <td><span class="badge {{ 'missed' if i.status=='missed' else 'on' if i.status=='done' else '' }}">{{ i.status }}</span></td>
-      <td>{{ i.done_at | fmt_local }}</td>
-      <td class="muted">{{ i.done_via or "" }}</td>
-      <td>{% if i.status in ("pending","notified","missed") %}
-        <form class="inline" method="post" action="/routines/instances/{{ i.id }}/done"><button class="small">完了</button></form>
-        {% if i.status != "missed" %}<form class="inline" method="post" action="/routines/instances/{{ i.id }}/skip"><button class="small">スキップ</button></form>{% endif %}
-      {% endif %}</td>
-    </tr>
-    {% endfor %}
-  </table>
-</div>
+<section class="panel">
+  {{ ui.head("最近の記録", "LOG / LATEST 30") }}
+  <div class="tbl-wrap">
+    <table class="tbl">
+      <thead><tr><th>予定</th><th>ルーティン</th><th>状態</th><th>完了時刻</th><th class="hide-sm">経路</th><th></th></tr></thead>
+      <tbody>
+        {% for i in instances %}
+        <tr>
+          <td class="t">{{ i.due_at | fmt_local }}</td>
+          <td>{{ i.routine_name }}</td>
+          <td>{{ ui.st(i.status) }}</td>
+          <td class="muted">{{ i.done_at | fmt_local }}</td>
+          <td class="muted hide-sm">{{ i.done_via or "" }}</td>
+          <td class="act">{% if i.status in ("pending", "notified", "missed") %}
+            <form class="inline" method="post" action="/routines/instances/{{ i.id }}/done"><button class="small">完了</button></form>
+            {% if i.status != "missed" %}<form class="inline" method="post" action="/routines/instances/{{ i.id }}/skip"><button class="small">スキップ</button></form>{% endif %}
+          {% endif %}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="muted">記録はまだないよ。</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
 {% endblock %}

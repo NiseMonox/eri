@@ -1,62 +1,72 @@
 {% extends "base.html" %}
-{% block title %}スケジュール - Eri{% endblock %}
+{% import "_ui.html" as ui %}
+{% set section = "schedules" %}
+{% block lead %}cron は東京時間(分 時 日 月 曜日)。変更は即反映、再起動不要だよ。{% endblock %}
 {% block content %}
-<h1>スケジュール</h1>
-<p class="muted">cron は東京時間(分 時 日 月 曜日)。変更は即反映、再起動不要だよ。</p>
 
 {% for r in rows %}
-<div class="card">
+<section class="panel sched{{ '' if r.enabled else ' off' }}">
   <form method="post" action="/schedules/{{ r.id }}/update">
-    <div class="formrow">
-      <span class="badge {{ 'on' if r.enabled }}">{{ "有効" if r.enabled else "無効" }}</span>
-      <input name="name" value="{{ r.name }}" style="width:150px">
-      <span class="badge">{{ r.type }}</span>
-      <input name="cron" value="{{ r.cron }}" style="width:120px">
-      <span class="muted">前回:{{ r.last_run_at | fmt_local }}</span>
-    </div>
-    <div class="formrow">
-      <textarea name="payload" rows="2">{{ r.payload | tojson_cn }}</textarea>
-    </div>
-    <div class="formrow">
-      <button class="small primary">保存</button>
+    <header class="ph">
+      <span class="tag {{ 'y' if r.enabled else 'h' }}">{{ "有効" if r.enabled else "無効" }}</span>
+      {{ ui.kind(r.type, "") }}
+      <input name="name" value="{{ r.name }}" aria-label="名前">
+      <input name="cron" value="{{ r.cron }}" aria-label="cron">
+      <span class="last">前回 {{ r.last_run_at | fmt_local }}</span>
+    </header>
+    <div class="pb">
+      <textarea class="code" name="payload" rows="2" spellcheck="false" aria-label="payload">{{ r.payload | tojson_cn }}</textarea>
+      <div class="ops">
+        <button class="small primary">保存</button>
+        <span class="sp"></span>
+        <button class="small" formaction="/schedules/{{ r.id }}/toggle">{{ "無効にする" if r.enabled else "有効にする" }}</button>
+        <button class="small" formaction="/schedules/{{ r.id }}/run">{{ ui.ico("i-play") }}今すぐ1回実行</button>
+        <button class="small danger" formaction="/schedules/{{ r.id }}/delete" onclick="return confirm('このタスクを削除する?')">削除</button>
+      </div>
     </div>
   </form>
-  <div class="formrow">
-    <form class="inline" method="post" action="/schedules/{{ r.id }}/toggle"><button class="small">{{ "無効にする" if r.enabled else "有効にする" }}</button></form>
-    <form class="inline" method="post" action="/schedules/{{ r.id }}/run"><button class="small">今すぐ1回実行</button></form>
-    <form class="inline" method="post" action="/schedules/{{ r.id }}/delete" onsubmit="return confirm('このタスクを削除する?')"><button class="small">削除</button></form>
-  </div>
-</div>
+</section>
+{% else %}
+<div class="empty" style="margin-bottom:16px">タスクはまだないよ。下から作ってね。</div>
 {% endfor %}
 
-<div class="card">
-  <h2 style="margin-top:0">新規作成</h2>
-  <form method="post" action="/schedules/create">
-    <div class="formrow">
-      <input name="name" placeholder="名前" required>
-      <select name="type" id="ntype" onchange="fillExample()">
-        <option value="routine">routine ルーティン(お薬・運動…)</option>
-        <option value="weight_prompt">weight_prompt 体重記録</option>
-        <option value="reminder">reminder リマインダー</option>
-        <option value="audio">audio オーディオ</option>
-        <option value="report">report 週報</option>
-      </select>
-      <input name="cron" id="ncron" placeholder="30 7 * * *" required>
-      <label><input type="checkbox" name="enabled" value="1" checked> 有効</label>
-    </div>
-    <div class="formrow"><textarea name="payload" id="npayload" rows="2">{}</textarea></div>
-    <div class="formrow"><button class="primary">作成</button></div>
-  </form>
-  <p class="muted">payload の例 —
-    routine: <code>{"routine_id":1,"nag":{"every_min":30,"max":3,"grace_min":120}}</code>
-    / 2日ごと(完了した日から数える・できなかった日は翌日もまた): <code>{"routine_id":1,"every_days":2}</code>
-    {% if routines %}(ルーティン:{% for r in routines %}{{ r.id }}={{ r.icon }}{{ r.name }} {% endfor %}){% endif %}<br>
-    audio ホワイトノイズ: <code>{"action":"white_noise","preset":"brown","volume":40,"duration_min":60}</code><br>
-    audio アラーム: <code>{"action":"alarm","fade_in_sec":120,"target_volume":80,"max_min":30}</code><br>
-    report: <code>{"days":7}</code>
-  </p>
-</div>
+<section class="panel">
+  {{ ui.head("新規作成", "NEW TASK") }}
+  <div class="pb">
+    <form method="post" action="/schedules/create">
+      <div class="fields">
+        <label class="field grow"><span>名前</span><input name="name" placeholder="例:夜のストレッチ" required></label>
+        <label class="field"><span>タイプ</span>
+          <select name="type" id="ntype" onchange="fillExample()">
+            <option value="routine">routine ルーティン(お薬・運動…)</option>
+            <option value="weight_prompt">weight_prompt 体重記録</option>
+            <option value="reminder">reminder リマインダー</option>
+            <option value="audio">audio オーディオ</option>
+            <option value="report">report 週報</option>
+          </select></label>
+        <label class="field"><span>cron</span><input name="cron" id="ncron" class="mono" placeholder="30 7 * * *" required style="width:150px"></label>
+        <label class="check" style="height:36px"><input type="checkbox" name="enabled" value="1" checked> 有効</label>
+      </div>
+      <div class="field" style="margin-top:12px"><span>payload(JSON)</span>
+        <textarea class="code" name="payload" id="npayload" rows="2" spellcheck="false">{}</textarea></div>
+      <div class="formrow" style="margin-top:12px"><button class="primary">作成</button></div>
+    </form>
 
+    <dl class="examples">
+      <dt>routine</dt><dd><code>{"routine_id":1,"nag":{"every_min":30,"max":3,"grace_min":120}}</code></dd>
+      <dt>2日ごと</dt><dd><code>{"routine_id":1,"every_days":2}</code> <span class="muted">完了した日から数える。できなかった日は翌日もまた</span></dd>
+      {% if routines %}
+      <dt>routine_id</dt><dd>{% for r in routines %}<span class="tag o" style="margin:0 4px 4px 0">{{ r.id }} = {{ r.name }}</span>{% endfor %}</dd>
+      {% endif %}
+      <dt>ホワイトノイズ</dt><dd><code>{"action":"white_noise","preset":"brown","volume":40,"duration_min":60}</code></dd>
+      <dt>アラーム</dt><dd><code>{"action":"alarm","fade_in_sec":120,"target_volume":80,"max_min":30}</code></dd>
+      <dt>report</dt><dd><code>{"days":7}</code></dd>
+    </dl>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
 <script>
 const EXAMPLES = {
   routine: '{"routine_id":1}',

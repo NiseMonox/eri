@@ -1,36 +1,54 @@
 {% extends "base.html" %}
-{% block title %}設定 - Eri{% endblock %}
+{% import "_ui.html" as ui %}
+{% set section = "settings" %}
 {% block content %}
-<h1>設定</h1>
 
-<div class="card">
-  <p>
-    Bark:<span class="badge {{ 'on' if bark_ok }}">{{ "設定済み" if bark_ok else "未設定(.env BARK_DEVICE_KEY)" }}</span>
-    Telegram:<span class="badge {{ 'on' if tg_ok }}">{{ "設定済み" if tg_ok else "未設定" }}</span>
-  </p>
-  <form class="inline" method="post" action="/settings/test-notify"><input type="hidden" name="profile" value="info"><button class="small">通常通知テスト</button></form>
-  <form class="inline" method="post" action="/settings/test-notify"><input type="hidden" name="profile" value="med"><button class="small">時限通知テスト</button></form>
-  <form class="inline" method="post" action="/settings/test-notify"><input type="hidden" name="profile" value="alarm"><button class="small">重大警報テスト(鳴るよ)</button></form>
-  <form class="inline" method="post" action="/settings/tts-test">
-    <input name="text" value="こんにちは、エリだよ" style="width:220px">
-    <button class="small">🔊 読み上げテスト</button>
-  </form>
-</div>
+<section class="panel">
+  {{ ui.head("通知チャンネル", "CHANNELS") }}
+  <div class="pb">
+    <div class="chan">
+      <div><span class="nm">BARK</span><span class="muted" style="font-size:12px">iPhone プッシュ</span>
+        {% if bark_ok %}<span class="st done">設定済み</span>{% else %}<span class="st missed">未設定(.env BARK_DEVICE_KEY)</span>{% endif %}</div>
+      <div><span class="nm">TELEGRAM</span><span class="muted" style="font-size:12px">双方向チャット</span>
+        {% if tg_ok %}<span class="st done">設定済み</span>{% else %}<span class="st missed">未設定</span>{% endif %}</div>
+    </div>
+    <div class="formrow">
+      <form class="inline" method="post" action="/settings/test-notify"><input type="hidden" name="profile" value="info"><button class="small">{{ ui.ico("i-send") }}通常通知テスト</button></form>
+      <form class="inline" method="post" action="/settings/test-notify"><input type="hidden" name="profile" value="med"><button class="small">{{ ui.ico("i-send") }}時限通知テスト</button></form>
+      <form class="inline" method="post" action="/settings/test-notify"><input type="hidden" name="profile" value="alarm"><button class="small danger">{{ ui.ico("i-alert") }}重大警報テスト(鳴るよ)</button></form>
+    </div>
+  </div>
+</section>
 
-<div class="card">
-  <h2 style="margin-top:0">実行パラメータ(JSON、保存で即反映)</h2>
-  <form method="post" action="/settings/update">
-    <table>
-      {% for k, v in values.items() %}
-      <tr><td style="width:220px"><code>{{ k }}</code></td>
-          <td><input name="{{ k }}" value="{{ v | tojson_cn }}" style="width:100%"></td></tr>
-      {% endfor %}
-    </table>
-    <div class="formrow"><button class="primary">保存</button></div>
-  </form>
-  <p class="muted">
-    audio.alsa_device:サウンドカード直通後は <code>"alsa/plughw:CARD=..."</code>(コンテナ内 <code>aplay -L</code> で確認)。空=デフォルト。<br>
-    med.defaults:服薬リマインドの再送パラメータ。schedule payload でタスクごとに上書き可。
-  </p>
-</div>
+<section class="panel">
+  {{ ui.head("読み上げテスト", "VOICE / VOICEVOX") }}
+  <div class="pb">
+    <form method="post" action="/settings/tts-test" class="formrow">
+      <input name="text" value="こんにちは、エリだよ" class="grow" aria-label="読み上げる文">
+      <button class="small">{{ ui.ico("i-speaker") }}スピーカーで読み上げ</button>
+    </form>
+  </div>
+</section>
+
+<section class="panel">
+  {{ ui.head("実行パラメータ", "RUNTIME PARAMETERS", "JSON · 保存で即反映") }}
+  <div class="pb">
+    <form method="post" action="/settings/update">
+      {% set HELP = {
+        "audio.alsa_device": "サウンドカード直通後は \"alsa/plughw:CARD=...\"(コンテナ内 aplay -L で確認)。空 = デフォルト",
+        "reminder.nag_defaults": "リマインダー・ルーティンの再送パラメータ。schedule の payload でタスクごとに上書きできる",
+      } %}
+      <div class="kv">
+        {% for k, v in values.items() %}
+        {% set grp = k.split(".")[0] %}
+        {% if loop.first or grp != loop.previtem[0].split(".")[0] %}<div class="grp">{{ grp | upper }}</div>{% endif %}
+        <label for="p-{{ loop.index }}"><code>{{ k }}</code></label>
+        <div><input id="p-{{ loop.index }}" name="{{ k }}" value="{{ v | tojson_cn }}" class="mono" spellcheck="false">
+          {% if k in HELP %}<small class="help">{{ HELP[k] }}</small>{% endif %}</div>
+        {% endfor %}
+      </div>
+      <div class="formrow" style="margin-top:16px"><button class="primary">保存</button></div>
+    </form>
+  </div>
+</section>
 {% endblock %}

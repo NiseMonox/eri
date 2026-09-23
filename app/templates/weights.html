@@ -1,56 +1,65 @@
 {% extends "base.html" %}
-{% block title %}体重 - Eri{% endblock %}
+{% import "_ui.html" as ui %}
+{% set section = "weights" %}
+{% block lead %}Withings の体重計から自動で入るよ。手で測ったときはここか、エリに「体重 62.5」って言ってね。{% endblock %}
 {% block content %}
-<h1>体重</h1>
 
-<div class="card">
-  <form method="post" action="/weights/create">
-    <div class="formrow">
-      <input name="weight_kg" type="number" step="0.05" min="20" max="300" placeholder="62.5" required>
-      <span>kg</span>
-      <input name="measured_at" type="datetime-local">
-      <span class="muted">(空欄=今)</span>
-      <button class="primary">記録</button>
-    </div>
-  </form>
+<div class="kpis">
   {% if stats %}
-  <p class="muted">直近30日:{{ stats.count }}回 / 平均 {{ stats.avg }}kg / 範囲 {{ stats.min }}–{{ stats.max }}kg / 変化 {{ "%+.2f"|format(stats.delta) }}kg</p>
+  <div class="kpi"><div class="k"><span>最新</span><span class="en">LATEST</span></div><div class="v">{{ "%.2f" | format(stats.last) }}<small>kg</small></div></div>
+  <div class="kpi"><div class="k"><span>30日の変化</span><span class="en">DELTA</span></div><div class="v">{{ "%+.2f" | format(stats.delta) }}<small>kg</small></div></div>
+  <div class="kpi"><div class="k"><span>30日の平均</span><span class="en">AVERAGE</span></div><div class="v">{{ "%.2f" | format(stats.avg) }}<small>kg</small></div></div>
+  <div class="kpi"><div class="k"><span>範囲 · {{ stats.count }}回</span><span class="en">RANGE</span></div><div class="v" style="font-size:22px;padding-top:6px">{{ "%.1f" | format(stats.min) }}–{{ "%.1f" | format(stats.max) }}<small>kg</small></div></div>
+  {% else %}
+  <div class="kpi" style="grid-column:1/-1"><div class="k"><span>直近30日</span><span class="en">NO DATA</span></div><div class="v">—</div></div>
   {% endif %}
-  <canvas id="wchart" height="140"></canvas>
 </div>
 
-<div class="card">
-  <table>
-    <tr><th>測定時刻</th><th>kg</th><th>ソース</th><th></th></tr>
-    {% for w in rows %}
-    <tr>
-      <td>{{ w.measured_at | fmt_local("%Y-%m-%d %H:%M") }}</td>
-      <td>{{ "%.2f"|format(w.weight_kg) }}</td>
-      <td class="muted">{{ w.source }}</td>
-      <td><form class="inline" method="post" action="/weights/{{ w.id }}/delete" onsubmit="return confirm('この記録を削除する?')"><button class="small">削除</button></form></td>
-    </tr>
-    {% endfor %}
-  </table>
-</div>
+<section class="panel">
+  {{ ui.head("記録する", "INPUT") }}
+  <div class="pb">
+    <form method="post" action="/weights/create">
+      <div class="fields">
+        <label class="field"><span>体重(kg)</span><input name="weight_kg" type="number" step="0.05" min="20" max="300" placeholder="62.5" required style="width:140px;font-size:16px;font-weight:700"></label>
+        <label class="field"><span>測定時刻(空欄 = 今)</span><input name="measured_at" type="datetime-local"></label>
+        <button class="primary">記録</button>
+      </div>
+    </form>
+  </div>
+</section>
 
+<section class="panel">
+  {{ ui.head("推移", "TREND / 90 DAYS") }}
+  <div class="pb">
+    <div class="chart-box tall" style="margin-top:0"><canvas id="wchart" aria-label="体重の推移(90日)" role="img"></canvas></div>
+  </div>
+</section>
+
+<section class="panel">
+  {{ ui.head("記録一覧", "LOG / LATEST 60") }}
+  <div class="tbl-wrap">
+    <table class="tbl">
+      <thead><tr><th>測定時刻</th><th>体重</th><th>ソース</th><th></th></tr></thead>
+      <tbody>
+        {% for w in rows %}
+        <tr>
+          <td class="t">{{ w.measured_at | fmt_local("%Y-%m-%d %H:%M") }}</td>
+          <td class="kg">{{ "%.2f" | format(w.weight_kg) }} <span class="muted" style="font-size:11px;font-weight:600">kg</span></td>
+          <td><span class="tag o">{{ w.source | upper }}</span></td>
+          <td class="act"><form class="inline" method="post" action="/weights/{{ w.id }}/delete" onsubmit="return confirm('この記録を削除する?')"><button class="small danger">削除</button></form></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="muted">記録はまだないよ。</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
 <script src="/static/chart.umd.js"></script>
 <script>
-fetch("/api/weights/series?days=90").then(r => r.json()).then(data => {
-  const css = getComputedStyle(document.documentElement);
-  new Chart(document.getElementById("wchart"), {
-    type: "line",
-    data: { labels: data.map(d => d.t.slice(5, 10)),
-            datasets: [{ data: data.map(d => d.kg), borderColor: css.getPropertyValue("--series").trim(),
-                         borderWidth: 2, pointRadius: 3, tension: 0.15 }] },
-    options: {
-      plugins: { legend: { display: false }, tooltip: { callbacks: {
-        title: items => data[items[0].dataIndex].t, label: item => item.parsed.y + " kg" } } },
-      scales: {
-        x: { grid: { display: false }, ticks: { color: css.getPropertyValue("--muted").trim(), maxTicksLimit: 10 } },
-        y: { grid: { color: css.getPropertyValue("--grid").trim() }, ticks: { color: css.getPropertyValue("--muted").trim() } }
-      }
-    }
-  });
-});
+fetch("/api/weights/series?days=90").then(r => r.json()).then(d => Eri.lineChart("wchart", d, "kg"));
 </script>
 {% endblock %}

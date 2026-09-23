@@ -1,0 +1,19 @@
+{#- 手机通知里的短链 / Withings 回跳用的单屏结果页(无侧栏、无需登录)。kind: ok | info | bad | mute -#}
+{% extends "base.html" %}
+{% set bare = true %}
+{% set ICON = {"ok": "i-check", "info": "i-info", "bad": "i-cross", "mute": "i-mute"} %}
+{% set CODE = {"ok": "DONE", "info": "INFO", "bad": "INVALID", "mute": "STOPPED"} %}
+{% block title %}{{ title }} · Eri{% endblock %}
+{% block solo %}
+<div class="solo">
+  <div class="solo-bg" aria-hidden="true">ERI</div>
+  <div class="solo-card">
+    <div class="hud"><span class="idx">[ {{ CODE.get(kind, "INFO") }} ]</span><span class="rule"></span></div>
+    <div class="solo-mark{{ ' bad' if kind == 'bad' }}"><svg class="ico" aria-hidden="true"><use href="#{{ ICON.get(kind, 'i-info') }}"/></svg></div>
+    <h1 style="font-size:22px;line-height:1.4">{{ title }}</h1>
+    <div class="tri"><i></i><i></i><i></i><i></i></div>
+    {% if sub %}<p class="muted" style="margin:0">{{ sub }}</p>{% endif %}
+  </div>
+  <div class="solo-band"><div class="a">ERI: HOME ASSISTANT</div><div class="b">{{ CODE.get(kind, "INFO") }}</div></div>
+</div>
+{% endblock %}

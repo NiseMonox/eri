@@ -1,12 +1,13 @@
 import secrets as pysecrets
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from .. import store
 from ..auth import require_token
 from ..ingest import withings
+from .callbacks import status_page
 
 router = APIRouter()
 
@@ -24,11 +25,11 @@ async def authorize():
 async def callback(code: str = "", state: str = ""):
     """Withings 授权后的回跳。LAN 内 iPhone/电脑浏览器发起授权时可直达。"""
     if not code:
-        return HTMLResponse("<h2>缺少 code</h2>", status_code=400)
+        return status_page("bad", "缺少 code", status_code=400)
     if state != store.get("withings.oauth_state"):
-        return HTMLResponse("<h2>state 不匹配,重新发起授权</h2>", status_code=400)
+        return status_page("bad", "state 不匹配,重新发起授权", status_code=400)
     await withings.exchange_code(code)
-    return HTMLResponse("<h2>✅ Withings 已连接,体重会自动同步</h2>")
+    return status_page("ok", "Withings 已连接,体重会自动同步")
 
 
 class CodeIn(BaseModel):

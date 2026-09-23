@@ -1,0 +1,27 @@
+{# 页面共用的小部件。用法:{% import "_ui.html" as ui %} #}
+
+{% macro ico(name) -%}
+<svg class="ico" aria-hidden="true"><use href="#{{ name }}"/></svg>
+{%- endmacro %}
+
+{% macro head(title, en="", meta="") -%}
+<header class="ph"><h2>{{ title }}</h2>{% if meta %}<span class="meta">{{ meta }}</span>{% endif %}{% if en %}<span class="en">{{ en }}</span>{% endif %}</header>
+{%- endmacro %}
+
+{# 状态:方块 + 文字(颜色之外还有文字,色弱也分得清) #}
+{% set ROUTINE_ST = {"pending": "予定", "notified": "確認待ち", "done": "完了", "dismissed": "スキップ", "missed": "未実施"} %}
+{% set REMINDER_ST = {"pending": "予定", "notified": "通知済み", "done": "完了", "dismissed": "キャンセル", "missed": "未実施"} %}
+
+{% macro st(status, labels=ROUTINE_ST) -%}
+<span class="st {{ status }}">{{ labels.get(status, status) }}</span>
+{%- endmacro %}
+
+{% macro cat(category) -%}
+<span class="tag o">{{ (ROUTINE_CATS.get(category) or ROUTINE_CATS["other"]).ja }}</span>
+{%- endmacro %}
+
+{% set KIND = {"routine": "ROUTINE", "med": "ROUTINE", "weight_prompt": "WEIGHT", "reminder": "REMIND", "audio": "AUDIO", "report": "REPORT"} %}
+
+{% macro kind(k, cls="o") -%}
+<span class="tag {{ cls }}">{{ KIND.get(k, k | upper) }}</span>
+{%- endmacro %}

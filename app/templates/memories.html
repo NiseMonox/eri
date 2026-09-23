@@ -1,125 +1,167 @@
 {% extends "base.html" %}
-{% block title %}メモリー - Eri{% endblock %}
+{% import "_ui.html" as ui %}
+{% set section = "memories" %}
+{% set SOURCE = {"consolidate": "自動", "user": "手動", "assistant": "会話"} %}
+{% block lead %}エリの長期記憶。毎朝 04:00 に前の日の会話から自動で整理(追加・更新・置き換え)して、会話ではこの中から関係ありそうなものだけを思い出すよ。間違ってたらここで直してね。{% endblock %}
 {% block content %}
-<h1>メモリー</h1>
-<p class="muted">エリの長期記憶。毎朝 04:00 に前の日の会話から自動で整理(追加・更新・置き換え)して、会話ではこの中から関係ありそうなものだけを思い出すよ。間違ってたらここで直してね。</p>
 
-<div class="card">
-  <h2 style="margin-top:0">記憶の整理</h2>
-  <p>
-    <span class="badge {{ 'on' if status.enabled }}">自動整理 {{ "ON" if status.enabled else "OFF" }}</span>
-    <span class="muted">未整理の会話 {{ status.pending_messages }} 件 · 記憶 {{ status.active }} 件
-      {%- if status.missing_vectors %} · ベクトル未計算 {{ status.missing_vectors }} 件{% endif %}</span>
-    {% if status.fail_streak %}<b>連続失敗 {{ status.fail_streak }} 回</b>{% endif %}
-  </p>
-  {% if status.last_run %}{% set lr = status.last_run %}{% set st = lr.stats or {} %}
-  <p class="muted">前回:{{ lr.day }} {{ {"ok": "完了", "undone": "取り消し済み", "skipped": "スキップ", "running": "実行中"}.get(lr.status, lr.status) }}
-    {% if lr.status == "ok" %}(追加 {{ st.added or 0 }}・更新 {{ st.updated or 0 }}・置き換え {{ st.superseded or 0 }}・既知 {{ st.skipped or 0 }}
-      {%- if st.diary %}・日記{% endif %}{% if st.guard %}・<b>ガード発動</b>{% endif %}){% endif %}
-    · {{ lr.finished_at | fmt_local }}</p>
-  {% endif %}
-  <div class="formrow">
-    <form class="inline" method="post" action="/memories/consolidate"><input type="hidden" name="dry_run" value="1"><button class="small">試しに整理(書き込まない)</button></form>
-    <form class="inline" method="post" action="/memories/consolidate"><button class="small">今すぐ整理</button></form>
-    {% if status.last_run and status.last_run.status == "ok" %}
-    <form class="inline" method="post" action="/memories/undo" onsubmit="return confirm('直前の整理を取り消す?(次の整理でやり直すよ)')"><button class="small">直前の整理を取り消す</button></form>
-    {% endif %}
-    <form class="inline" method="post" action="/memories/reembed"><button class="small">ベクトル再計算</button></form>
-  </div>
+<div class="kpis">
+  <div class="kpi"><div class="k"><span>記憶</span><span class="en">ACTIVE</span></div><div class="v">{{ status.active }}<small>件</small></div></div>
+  <div class="kpi{{ ' warn' if status.pending_messages }}"><div class="k"><span>未整理の会話</span><span class="en">PENDING</span></div><div class="v">{{ status.pending_messages }}<small>件</small></div></div>
+  <div class="kpi{{ ' warn' if status.missing_vectors }}"><div class="k"><span>ベクトル未計算</span><span class="en">NO VECTOR</span></div><div class="v">{{ status.missing_vectors or 0 }}<small>件</small></div></div>
+  <div class="kpi{{ ' hot' if status.fail_streak }}"><div class="k"><span>連続失敗</span><span class="en">FAIL STREAK</span></div><div class="v">{{ status.fail_streak or 0 }}<small>回</small></div></div>
 </div>
+
+<section class="panel">
+  <header class="ph"><h2>記憶の整理</h2>
+    <span class="tag {{ 'y' if status.enabled else 'h' }}">自動整理 {{ "ON" if status.enabled else "OFF" }}</span>
+    <span class="en">CONSOLIDATION / DAILY 04:00</span></header>
+  <div class="pb">
+    {% if status.last_run %}{% set lr = status.last_run %}{% set s = lr.stats or {} %}
+    <p style="font-size:13px">
+      <span class="muted">前回</span> <b class="num">{{ lr.day }}</b>
+      <span class="tag o" style="margin:0 6px">{{ {"ok": "完了", "undone": "取り消し済み", "skipped": "スキップ", "running": "実行中"}.get(lr.status, lr.status) }}</span>
+      {% if lr.status == "ok" %}追加 {{ s.added or 0 }} · 更新 {{ s.updated or 0 }} · 置き換え {{ s.superseded or 0 }} · 既知 {{ s.skipped or 0 }}
+        {%- if s.diary %} · 日記{% endif %}{% if s.guard %} · <b style="color:var(--magenta)">ガード発動</b>{% endif %}{% endif %}
+      <span class="muted"> — {{ lr.finished_at | fmt_local }}</span>
+    </p>
+    {% else %}
+    <p class="muted" style="font-size:13px">まだ一度も整理してないよ。</p>
+    {% endif %}
+    <div class="formrow">
+      <form class="inline" method="post" action="/memories/consolidate"><input type="hidden" name="dry_run" value="1"><button class="small">試しに整理(書き込まない)</button></form>
+      <form class="inline" method="post" action="/memories/consolidate"><button class="small primary">今すぐ整理</button></form>
+      {% if status.last_run and status.last_run.status == "ok" %}
+      <form class="inline" method="post" action="/memories/undo" onsubmit="return confirm('直前の整理を取り消す?(次の整理でやり直すよ)')"><button class="small danger">直前の整理を取り消す</button></form>
+      {% endif %}
+      <form class="inline" method="post" action="/memories/reembed"><button class="small">ベクトル再計算</button></form>
+    </div>
+  </div>
+</section>
 
 {% if preview %}
-<div class="card">
-  <h2 style="margin-top:0">試しに整理した結果(まだ書き込んでないよ)</h2>
-  {% if preview.error %}<p><b>{{ preview.error }}</b></p>{% endif %}
-  {% for d in preview.days %}
-  <h3>{{ d.day }}</h3>
-  <table>
-    {% for it in d["items"] %}
-    <tr><td><span class="badge">{{ {"ADD": "追加", "UPDATE": "更新", "SUPERSEDE": "置き換え", "SKIP": "既知"}.get(it.op, it.op) }}</span></td>
-        <td class="muted">{{ kinds.get(it.kind, it.kind) }}</td><td>{{ it.text }}</td>
-        <td class="muted">{% if it.target %}#{{ it.target }}{% endif %}</td></tr>
+<section class="panel" style="border-left:4px solid var(--yellow)">
+  {{ ui.head("試しに整理した結果", "DRY RUN / NOT WRITTEN", "まだ書き込んでないよ") }}
+  <div class="pb">
+    {% if preview.error %}<div class="flash bad" style="animation:none"><b>ERROR</b><span>{{ preview.error }}</span></div>{% endif %}
+    {% for d in preview.days %}
+    <h3 class="num">{{ d.day }}</h3>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <tbody>
+          {% for it in d["items"] %}
+          <tr><td style="width:1%"><span class="tag {{ 'y' if it.op == 'ADD' else 'o' if it.op == 'SKIP' else '' }}">{{ {"ADD": "追加", "UPDATE": "更新", "SUPERSEDE": "置き換え", "SKIP": "既知"}.get(it.op, it.op) }}</span></td>
+            <td class="muted nowrap" style="width:1%">{{ kinds.get(it.kind, it.kind) }}</td><td>{{ it.text }}</td>
+            <td class="muted nowrap" style="width:1%">{% if it.target %}#{{ it.target }}{% endif %}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if d.diary %}<p class="hint"><span class="tag o">日記</span> {{ d.diary }}</p>{% endif %}
+    {% if d.rejected %}<p class="hint">相対的な日付などで弾いた候補:{{ d.rejected }} 件</p>{% endif %}
+    {% else %}
+    <div class="empty">整理する会話はまだないよ(その日が終わる 04:00 以降に整理できる)。</div>
     {% endfor %}
-  </table>
-  {% if d.diary %}<p class="muted">日記:{{ d.diary }}</p>{% endif %}
-  {% if d.rejected %}<p class="muted">相対的な日付などで弾いた候補:{{ d.rejected }} 件</p>{% endif %}
-  {% else %}
-  <p class="muted">整理する会話はまだないよ(その日が終わる 04:00 以降に整理できる)。</p>
-  {% endfor %}
-</div>
+  </div>
+</section>
 {% endif %}
 
-<div class="card">
-  <h2 style="margin-top:0">コア(毎回の会話にいつも入る)</h2>
-  <p class="muted">{{ usage.count }} 件 · {{ usage.tokens }}/{{ usage.budget }} token
-    {%- if usage.tokens > usage.budget %} · <b>上限を超えてる:後ろの方は会話に入らないよ</b>{% endif %}
-    {%- if usage.count > usage.max %} · <b>件数の上限 {{ usage.max }} を超えてる</b>{% endif %}</p>
-  <table>
-    {% for m in core %}
-    <tr><td class="muted">#{{ m.id }}</td><td class="muted">{{ kinds.get(m.kind, m.kind) }}</td><td>{{ m.text }}</td>
-        <td style="white-space:nowrap">
-          <form class="inline" method="post" action="/memories/{{ m.id }}/core"><button class="small">コアから外す</button></form>
-          <form class="inline" method="post" action="/memories/{{ m.id }}/delete"><button class="small">忘れる</button></form></td></tr>
-    {% else %}
-    <tr><td class="muted">まだないよ。目標・アレルギー・生活リズムみたいに、いつも知っててほしいことはコアに入れてね。</td></tr>
-    {% endfor %}
-  </table>
-</div>
-
-<div class="card">
-  <form method="post" action="/memories/create">
-    <div class="formrow">
-      <select name="kind">{% for k, v in kinds.items() if k != "diary" %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select>
-      <input name="text" placeholder="覚えてほしいこと(例: 毎週水曜はジムに行く)" required style="flex:1;min-width:240px">
-      <input name="event_at" type="datetime-local" title="予定・出来事の日時(予定は必須)">
-      <label><input type="checkbox" name="core" value="1"> コア</label>
-      <button class="primary">覚えて</button>
+<section class="panel">
+  {{ ui.head("コア", "CORE PROFILE", "毎回の会話にいつも入る") }}
+  <div class="pb">
+    {% set over = usage.tokens > usage.budget %}
+    <div style="display:flex;justify-content:space-between;gap:12px;font-size:12.5px">
+      <span><b class="num">{{ usage.count }}</b> <span class="muted">/ {{ usage.max }} 件</span></span>
+      <span class="num"><b>{{ usage.tokens }}</b> <span class="muted">/ {{ usage.budget }} token</span></span>
     </div>
-  </form>
-</div>
-
-<div class="card">
-  <form method="get" action="/memories" class="formrow">
-    <input name="q" value="{{ q }}" placeholder="キーワードで絞り込み" style="flex:1">
-    <select name="kind"><option value="">すべて</option>{% for k, v in kinds.items() %}<option value="{{ k }}" {% if k == kind %}selected{% endif %}>{{ v }}</option>{% endfor %}</select>
-    <button class="small">絞り込む</button>
-  </form>
-  <table>
-    {% for m in rows %}
-    <tr>
-      <td class="muted" style="white-space:nowrap">{{ m.day or "" }}</td>
-      <td class="muted" style="white-space:nowrap">{{ kinds.get(m.kind, m.kind) }}{% if m.core %} ⭐{% endif %}</td>
-      <td style="width:60%">
-        <form method="post" action="/memories/{{ m.id }}/update" class="formrow" style="margin:0">
-          <input name="text" value="{{ m.text }}" style="flex:1"><button class="small">更新</button>
-        </form>
-      </td>
-      <td class="muted">{{ {"consolidate": "自動", "user": "手動", "assistant": "会話"}.get(m.source, m.source) }}</td>
-      <td style="white-space:nowrap">
-        {% if m.kind in core_kinds %}<form class="inline" method="post" action="/memories/{{ m.id }}/core"><button class="small">{{ "コア外す" if m.core else "コアに" }}</button></form>{% endif %}
-        <form class="inline" method="post" action="/memories/{{ m.id }}/delete"><button class="small">忘れる</button></form>
-      </td>
-    </tr>
-    {% else %}
-    <tr><td class="muted">{% if q or kind %}見つからなかったよ。{% else %}まだ何も覚えてないよ。話しかけてみて。{% endif %}</td></tr>
-    {% endfor %}
-  </table>
-  <div class="formrow">
-    {% if page > 1 %}<a href="/memories?q={{ q | urlencode }}&kind={{ kind }}&page={{ page - 1 }}">← 前へ</a>{% endif %}
-    {% if has_next %}<a href="/memories?q={{ q | urlencode }}&kind={{ kind }}&page={{ page + 1 }}">次へ →</a>{% endif %}
+    <div class="meter{{ ' over' if over }}"><i style="width:{{ [usage.tokens / (usage.budget or 1) * 100, 100] | min | round(1) }}%"></i></div>
+    {% if over %}<p class="hint" style="color:var(--magenta)">上限を超えてる:後ろの方は会話に入らないよ</p>{% endif %}
+    {% if usage.count > usage.max %}<p class="hint" style="color:var(--magenta)">件数の上限 {{ usage.max }} を超えてる</p>{% endif %}
   </div>
-</div>
+  {% if core %}
+  <div style="border-top:1px solid var(--line-2)">
+    {% for m in core %}
+    <div class="mem">
+      <div class="who"><span class="tag o">{{ kinds.get(m.kind, m.kind) }}</span><span class="num">#{{ m.id }}</span></div>
+      <div class="text">{{ m.text }}</div>
+      <div class="ops">
+        <form class="inline" method="post" action="/memories/{{ m.id }}/core"><button class="small">コアから外す</button></form>
+        <form class="inline" method="post" action="/memories/{{ m.id }}/delete"><button class="small danger">忘れる</button></form>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="pb" style="padding-top:0"><div class="empty">まだないよ。目標・アレルギー・生活リズムみたいに、いつも知っててほしいことはコアに入れてね。</div></div>
+  {% endif %}
+</section>
+
+<section class="panel">
+  {{ ui.head("覚えてほしいこと", "NEW MEMORY") }}
+  <div class="pb">
+    <form method="post" action="/memories/create">
+      <div class="fields">
+        <label class="field"><span>種類</span>
+          <select name="kind">{% for k, v in kinds.items() if k != "diary" %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></label>
+        <label class="field grow"><span>内容</span><input name="text" placeholder="例:毎週水曜はジムに行く" required></label>
+        <label class="field"><span>日時(予定は必須)</span><input name="event_at" type="datetime-local"></label>
+        <label class="check" style="height:36px"><input type="checkbox" name="core" value="1"> コア</label>
+        <button class="primary">覚えて</button>
+      </div>
+    </form>
+  </div>
+</section>
+
+<section class="panel">
+  <header class="ph"><h2>記憶ライブラリ</h2><span class="en">LIBRARY</span></header>
+  <div class="pb" style="border-bottom:1px solid var(--line-2)">
+    <form method="get" action="/memories" class="formrow">
+      <input name="q" value="{{ q }}" placeholder="キーワードで絞り込み" class="grow" aria-label="キーワード">
+      <select name="kind" aria-label="種類"><option value="">すべて</option>{% for k, v in kinds.items() %}<option value="{{ k }}"{% if k == kind %} selected{% endif %}>{{ v }}</option>{% endfor %}</select>
+      <button class="small">{{ ui.ico("i-search") }}絞り込む</button>
+    </form>
+  </div>
+  {% for m in rows %}
+  <div class="mem">
+    <div class="who">
+      <span class="tag o">{{ kinds.get(m.kind, m.kind) }}</span>{% if m.core %}<span class="tag y">CORE</span>{% endif %}
+      <span>{{ SOURCE.get(m.source, m.source) }}</span>
+      {% if m.day %}<span class="day">{{ m.day }}</span>{% endif %}
+    </div>
+    <form method="post" action="/memories/{{ m.id }}/update" class="edit">
+      <input name="text" value="{{ m.text }}" aria-label="記憶 #{{ m.id }}"><button class="small">更新</button>
+    </form>
+    <div class="ops">
+      {% if m.kind in core_kinds %}<form class="inline" method="post" action="/memories/{{ m.id }}/core"><button class="small ghost">{{ "コア外す" if m.core else "コアに" }}</button></form>{% endif %}
+      <form class="inline" method="post" action="/memories/{{ m.id }}/delete"><button class="small danger">忘れる</button></form>
+    </div>
+  </div>
+  {% else %}
+  <div class="pb"><div class="empty">{% if q or kind %}見つからなかったよ。{% else %}まだ何も覚えてないよ。話しかけてみて。{% endif %}</div></div>
+  {% endfor %}
+  {% if page > 1 or has_next %}
+  <nav class="pager">
+    {% if page > 1 %}<a class="btn small" href="/memories?q={{ q | urlencode }}&kind={{ kind }}&page={{ page - 1 }}">前へ</a>{% else %}<span></span>{% endif %}
+    <span class="muted num" style="align-self:center;font-size:12px">PAGE {{ page }}</span>
+    {% if has_next %}<a class="btn small" href="/memories?q={{ q | urlencode }}&kind={{ kind }}&page={{ page + 1 }}">次へ</a>{% else %}<span></span>{% endif %}
+  </nav>
+  {% endif %}
+</section>
 
 {% if forgotten %}
-<details class="card" style="opacity:.8">
-  <summary class="muted">忘れたもの(直近 {{ forgotten | length }} 件、復元できるよ)</summary>
-  <table style="margin-top:8px">
-    {% for m in forgotten %}
-    <tr><td class="muted">{{ kinds.get(m.kind, m.kind) }}</td><td>{{ m.text }}</td>
-        <td class="muted">{{ m.updated_at | fmt_local }}</td>
-        <td><form class="inline" method="post" action="/memories/{{ m.id }}/reactivate"><button class="small">思い出す</button></form></td></tr>
-    {% endfor %}
-  </table>
+<details class="panel">
+  <summary>{{ ui.head("忘れたもの", "ARCHIVE", "直近 " ~ (forgotten | length) ~ " 件 · 復元できるよ") }}</summary>
+  <div class="tbl-wrap">
+    <table class="tbl">
+      <tbody>
+        {% for m in forgotten %}
+        <tr><td class="nowrap" style="width:1%"><span class="tag o">{{ kinds.get(m.kind, m.kind) }}</span></td><td>{{ m.text }}</td>
+          <td class="muted nowrap hide-sm" style="width:1%">{{ m.updated_at | fmt_local }}</td>
+          <td class="act"><form class="inline" method="post" action="/memories/{{ m.id }}/reactivate"><button class="small">思い出す</button></form></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </details>
 {% endif %}
 {% endblock %}

@@ -1,156 +1,191 @@
 {% extends "base.html" %}
+{% import "_ui.html" as ui %}
+{% set section = "today" %}
 {% block content %}
-<h1>今日</h1>
+{% set other_done = done_today | rejectattr("kind", "equalto", "routine") | list %}
+{% set n_missed = routine_missed | length %}
+
+<div class="kpis">
+  <div class="kpi"><div class="k"><span>今日の予定</span><span class="en">AGENDA</span></div>
+    <div class="v">{{ agenda | length }}<small>件</small></div></div>
+  <div class="kpi{{ ' warn' if routine_open }}"><div class="k"><span>確認待ち</span><span class="en">OPEN</span></div>
+    <div class="v">{{ routine_open | length }}<small>件</small></div></div>
+  <div class="kpi{{ ' hot' if n_missed }}"><div class="k"><span>未実施</span><span class="en">MISSED</span></div>
+    <div class="v">{{ n_missed }}{% if n_missed >= 10 %}+{% endif %}<small>件</small></div></div>
+  <div class="kpi"><div class="k"><span>今日の完了</span><span class="en">DONE</span></div>
+    <div class="v">{{ routine_done | length + other_done | length }}<small>件</small></div></div>
+</div>
 
 {% if routine_missed %}
-<div class="card alert">
-  <strong>⚠️ 未実施のルーティン</strong>
-  <table>
-    {% for i in routine_missed %}
-    <tr><td>{{ i.due_at | fmt_local }}</td><td>{{ i.icon }} {{ i.routine_name }}</td>
-      <td><form class="inline" method="post" action="/routines/instances/{{ i.id }}/done"><button class="small">やった(後追い)</button></form></td></tr>
-    {% endfor %}
-  </table>
-</div>
+<section class="panel alert">
+  {{ ui.head("未実施のルーティン", "MISSED", "やっていたら後から記録できるよ") }}
+  <div class="pb">
+    <ul class="checklist{{ ' two' if n_missed > 3 }}">
+      {% for i in routine_missed %}
+      <li><span class="miss-mark"></span><time>{{ i.due_at | fmt_local("%m/%d") }}</time>
+        <span>{{ i.routine_name }} <span class="muted">{{ i.due_at | fmt_local("%H:%M") }}</span></span>
+        <span class="act"><form class="inline" method="post" action="/routines/instances/{{ i.id }}/done"><button class="small">やった(後追い)</button></form></span></li>
+      {% endfor %}
+    </ul>
+  </div>
+</section>
 {% endif %}
 
 {% if routine_open %}
-<div class="card">
-  <strong>確認待ちのルーティン</strong>
-  <table>
-    {% for i in routine_open %}
-    <tr><td>{{ i.due_at | fmt_local }}</td><td>{{ i.icon }} {{ i.routine_name }}</td>
-      <td><form class="inline" method="post" action="/routines/instances/{{ i.id }}/done"><button class="small primary">✅ やった</button></form>
-          <form class="inline" method="post" action="/routines/instances/{{ i.id }}/skip"><button class="small">スキップ</button></form></td></tr>
-    {% endfor %}
-  </table>
-</div>
-{% endif %}
-
-{% if done_today or routine_done %}
-<div class="card">
-  <strong>今日の完了 ✅</strong>
-  <table>
-    {% for i in routine_done %}<tr><td>{{ i.done_at | fmt_local("%H:%M") }}</td><td>{{ i.icon }} {{ i.routine_name }}</td></tr>{% endfor %}
-    {% for d in done_today if d.kind != "routine" %}<tr><td>{{ d.done_at | fmt_local("%H:%M") }}</td><td>🔔 {{ d.title }}</td></tr>{% endfor %}
-  </table>
-</div>
-{% endif %}
-
-<div class="grid2">
-  <div class="card">
-    <h2 style="margin-top:0">今日の予定</h2>
-    {% if agenda %}
-    <table>
-      {% for a in agenda %}
-      <tr><td>{{ a.time }}</td><td>{{ a.icon or {"routine":"✅","med":"💊","weight_prompt":"⚖️","reminder":"🔔"}.get(a.kind, "•") }} {{ a.title }}</td></tr>
+<section class="panel">
+  {{ ui.head("確認待ちのルーティン", "AWAITING CONFIRMATION") }}
+  <div class="pb">
+    <ul class="checklist">
+      {% for i in routine_open %}
+      <li><span class="open-mark"></span><time>{{ i.due_at | fmt_local("%H:%M") }}</time>
+        <span>{{ i.routine_name }} {{ ui.cat(i.category) }}</span>
+        <span class="act">
+          <form class="inline" method="post" action="/routines/instances/{{ i.id }}/done"><button class="small primary">やった</button></form>
+          <form class="inline" method="post" action="/routines/instances/{{ i.id }}/skip"><button class="small">スキップ</button></form>
+        </span></li>
       {% endfor %}
-    </table>
-    {% else %}<p class="muted">予定なし(「スケジュール」で作成してね)</p>{% endif %}
+    </ul>
   </div>
+</section>
+{% endif %}
 
-  <div class="card">
-    <h2 style="margin-top:0">体重(直近7日)</h2>
-    {% if stats %}
-    <div class="stat">{{ stats.last }} <small>kg({{ "%+.2f"|format(stats.delta) }} / {{ stats.count }}回)</small></div>
-    {% else %}<p class="muted">記録なし</p>{% endif %}
-    <canvas id="wchart" height="170"></canvas>
-    {% if body %}
-    <table style="margin-top:8px">
-      {% for k, v in body.items() if k != "height" %}
-      <tr><td class="muted">{{ body_labels.get(k, k) }}</td>
-          <td>{{ "%.1f"|format(v.value) }} {{ v.unit }}</td>
-          <td class="muted">{{ v.measured_at | fmt_local("%m-%d") }}</td></tr>
-      {% endfor %}
-    </table>
+<div class="cols">
+  <div>
+    <section class="panel">
+      {{ ui.head("今日の予定", "AGENDA") }}
+      <div class="pb">
+        {% if agenda %}
+        <ol class="tl" data-agenda>
+          {% for a in agenda %}
+          <li data-when="{{ a.when }}"><time>{{ a.time }}</time><span class="node"></span>
+            <span class="what">{{ ui.kind(a.kind) }}<span>{{ a.title }}</span></span></li>
+          {% endfor %}
+        </ol>
+        {% else %}
+        <div class="empty">予定なし。「スケジュール」で作るか、エリに話しかけて設定してね。</div>
+        {% endif %}
+      </div>
+    </section>
+
+    {% if routine_done or other_done %}
+    <section class="panel">
+      {{ ui.head("今日の完了", "COMPLETED") }}
+      <div class="pb">
+        <ul class="checklist">
+          {% for i in routine_done %}
+          <li><span class="done-mark">{{ ui.ico("i-check") }}</span><time>{{ i.done_at | fmt_local("%H:%M") }}</time><span>{{ i.routine_name }}</span><span class="act">{{ ui.cat(i.category) }}</span></li>
+          {% endfor %}
+          {% for d in other_done %}
+          <li><span class="done-mark">{{ ui.ico("i-check") }}</span><time>{{ d.done_at | fmt_local("%H:%M") }}</time><span>{{ d.title }}</span><span class="act">{{ ui.kind("reminder") }}</span></li>
+          {% endfor %}
+        </ul>
+      </div>
+    </section>
     {% endif %}
+
+    {% if activity %}
+    {% set m = activity.metrics %}
+    <section class="panel">
+      {{ ui.head("アクティビティ", "ACTIVITY / 14 DAYS", activity.at | fmt_local("%m/%d") ~ " の記録") }}
+      <div class="pb">
+        {% if m.steps %}<div class="big"><span class="n">{{ "{:,}".format(m.steps.value | int) }}</span><span class="u">歩</span></div>{% endif %}
+        <div class="subnums">
+          {% if m.active_energy %}<div>消費カロリー<b>{{ m.active_energy.value | int }}<small>kcal</small></b></div>{% endif %}
+          {% if m.exercise_time %}<div>エクササイズ<b>{{ m.exercise_time.value | int }}<small>分</small></b></div>{% endif %}
+          {% if m.distance %}<div>距離<b>{{ "%.2f" | format(m.distance.value) }}<small>{{ m.distance.unit }}</small></b></div>{% endif %}
+        </div>
+        <div class="chart-box short"><canvas id="achart" aria-label="歩数の推移(14日)" role="img"></canvas></div>
+      </div>
+    </section>
+    {% endif %}
+
+    <section class="panel">
+      {{ ui.head("オーディオ", "AUDIO") }}
+      <div class="pb">
+        {% set AUDIO = {"white_noise": "ホワイトノイズ", "alarm": "アラーム", "announce": "読み上げ"} %}
+        {% if audio.playing %}
+        <div class="audio">
+          <div class="state"><span class="eq" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+            <div><b>NOW PLAYING</b><br><strong>{{ AUDIO.get(audio.action, audio.action) }}</strong>
+              {% if audio.started_at %}<span class="muted">{{ audio.started_at | fmt_local("%H:%M") }} から</span>{% endif %}</div></div>
+          {% if audio.action != "announce" %}
+          <div class="vol">
+            <span class="muted">音量</span>
+            <input type="range" min="0" max="100" step="5" value="{{ audio.target_volume }}" aria-label="音量"
+                   oninput="document.getElementById('volv').textContent = this.value" onchange="Eri.setVolume(this.value)">
+            <output id="volv">{{ audio.target_volume }}</output>
+            <form class="inline" method="post" action="/audio/stop-web"><button>{{ ui.ico("i-stop") }}停止</button></form>
+          </div>
+          {% endif %}
+        </div>
+        {% else %}
+        <div class="audio">
+          <div class="state"><span class="eq idle" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+            <div><b>IDLE</b><br><span class="muted">再生していないよ</span></div></div>
+          <div class="formrow" style="margin:0 0 0 auto">
+            <form class="inline" method="post" action="/audio/play-test"><input type="hidden" name="action" value="white_noise"><button class="small">{{ ui.ico("i-play") }}ホワイトノイズ 5分</button></form>
+            <form class="inline" method="post" action="/audio/play-test"><input type="hidden" name="action" value="alarm"><button class="small">{{ ui.ico("i-play") }}アラーム</button></form>
+          </div>
+        </div>
+        {% endif %}
+      </div>
+    </section>
   </div>
 
-  {% if activity %}
-  <div class="card">
-    <h2 style="margin-top:0">アクティビティ({{ activity.at | fmt_local("%m/%d") }})</h2>
-    <div class="stat">
-      {% if activity.metrics.steps %}{{ "{:,}".format(activity.metrics.steps.value | int) }} <small>歩</small>{% endif %}
-      {% if activity.metrics.active_energy %}<small style="margin-left:8px">🔥 {{ activity.metrics.active_energy.value | int }} kcal</small>{% endif %}
-      {% if activity.metrics.exercise_time %}<small style="margin-left:8px">🏃 {{ activity.metrics.exercise_time.value | int }} 分</small>{% endif %}
-    </div>
-    <canvas id="achart" height="150"></canvas>
-  </div>
-  {% endif %}
-</div>
+  <div>
+    <section class="panel">
+      {{ ui.head("体重", "WEIGHT / 30 DAYS") }}
+      <div class="pb">
+        {% if stats %}
+        <div class="big">
+          <span class="n">{{ "%.2f" | format(stats.last) }}</span><span class="u">kg</span>
+          <span class="delta {{ 'down' if stats.delta < 0 else 'up' if stats.delta > 0 else 'flat' }}">{{ "%+.2f" | format(stats.delta) }} kg</span>
+          <span class="muted" style="font-size:12px">直近7日 · {{ stats.count }}回</span>
+        </div>
+        {% else %}
+        <div class="empty">直近7日の記録なし</div>
+        {% endif %}
+        <div class="chart-box"><canvas id="wchart" aria-label="体重の推移(30日)" role="img"></canvas></div>
+      </div>
+    </section>
 
-<div class="card">
-  <h2 style="margin-top:0">オーディオ</h2>
-  {% if audio.playing %}
-    <p>▶️ 再生中:{{ audio.action }}({{ audio.started_at | fmt_local("%H:%M") }}から)</p>
-    <div class="formrow">
-      <span class="muted">音量</span>
-      <input type="range" min="0" max="100" step="5" value="{{ audio.target_volume }}"
-             style="flex:1;max-width:280px"
-             oninput="document.getElementById('volv').textContent=this.value"
-             onchange="setVol(this.value)">
-      <strong id="volv">{{ audio.target_volume }}</strong>
-      <form class="inline" method="post" action="/audio/stop-web"><button>⏹ 停止</button></form>
-    </div>
-    <script>
-    function setVol(v) {
-      fetch("/api/audio/volume", {method: "POST", headers: {"Content-Type": "application/json"},
-                                  body: JSON.stringify({volume: +v})});
-    }
-    </script>
-  {% else %}
-    <p class="muted">再生していないよ</p>
-    <form class="inline" method="post" action="/audio/play-test"><input type="hidden" name="action" value="white_noise"><button class="small">ホワイトノイズを5分試す</button></form>
-    <form class="inline" method="post" action="/audio/play-test"><input type="hidden" name="action" value="alarm"><button class="small">アラームを試す</button></form>
-  {% endif %}
+    {% set comp = body | reject("equalto", "height") | list %}
+    {% if comp %}
+    {% set ORDER = ["fat_ratio", "muscle_mass", "fat_mass", "fat_free_mass", "visceral_fat", "hydration", "bone_mass",
+                    "basal_metabolic_rate", "metabolic_age", "heart_rate", "pulse_wave_velocity", "vascular_age", "nerve_health_score"] %}
+    {% set keys = ORDER | select("in", comp) | list + comp | reject("in", ORDER) | list %}
+    {% set UNIT = {"index": "", "years": "歳"} %}
+    {% set ref = body[keys[0]].measured_at | fmt_local("%m/%d") %}
+    <section class="panel">
+      {{ ui.head("体組成", "BODY COMPOSITION", ref ~ " 計測") }}
+      <div class="spec">
+        {% for k in keys %}{% set v = body[k] %}{% set d = v.measured_at | fmt_local("%m/%d") %}
+        <div><div class="k"><span>{{ body_labels.get(k, k) }}</span>{% if d != ref %}<span>{{ d }}</span>{% endif %}</div>
+          <div class="v">{{ "%.1f" | format(v.value) }}<small>{{ UNIT.get(v.unit, v.unit) }}</small></div></div>
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+
+  </div>
 </div>
 
 {% if errors %}
-<div class="card">
-  <h2 style="margin-top:0">最近のエラー</h2>
-  <table>{% for e in errors %}<tr><td>{{ e.ts | fmt_local }}</td><td>{{ e.kind }}</td><td class="muted">{{ e.detail }}</td></tr>{% endfor %}</table>
-</div>
+<section class="panel">
+  {{ ui.head("最近のエラー", "ERROR LOG") }}
+  {% for e in errors | sort(attribute="ts", reverse=true) %}
+  <div class="log-row"><time>{{ e.ts | fmt_local }}</time><span class="tag m">{{ e.kind }}</span><span class="d">{{ e.detail }}</span></div>
+  {% endfor %}
+</section>
 {% endif %}
+{% endblock %}
 
+{% block scripts %}
 <script src="/static/chart.umd.js"></script>
 <script>
-fetch("/api/weights/series?days=30").then(r => r.json()).then(data => {
-  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
-  const css = getComputedStyle(document.documentElement);
-  new Chart(document.getElementById("wchart"), {
-    type: "line",
-    data: { labels: data.map(d => d.t.slice(5, 10)),
-            datasets: [{ data: data.map(d => d.kg), borderColor: css.getPropertyValue("--series").trim(),
-                         borderWidth: 2, pointRadius: 4, tension: 0.15 }] },
-    options: {
-      plugins: { legend: { display: false }, tooltip: { callbacks: {
-        title: items => data[items[0].dataIndex].t, label: item => item.parsed.y + " kg" } } },
-      scales: {
-        x: { grid: { display: false }, ticks: { color: css.getPropertyValue("--muted").trim(), maxTicksLimit: 8 } },
-        y: { grid: { color: css.getPropertyValue("--grid").trim() }, ticks: { color: css.getPropertyValue("--muted").trim() } }
-      }
-    }
-  });
-});
+fetch("/api/weights/series?days=30").then(r => r.json()).then(d => Eri.lineChart("wchart", d, "kg"));
 if (document.getElementById("achart")) {
-  fetch("/api/body/series?metric=steps&days=14").then(r => r.json()).then(data => {
-    const css = getComputedStyle(document.documentElement);
-    new Chart(document.getElementById("achart"), {
-      type: "bar",
-      data: { labels: data.map(d => d.t.slice(5, 10)),
-              datasets: [{ data: data.map(d => d.v), backgroundColor: css.getPropertyValue("--series").trim(),
-                           borderRadius: 3 }] },
-      options: {
-        plugins: { legend: { display: false }, tooltip: { callbacks: {
-          title: items => data[items[0].dataIndex].t.slice(0, 10),
-          label: item => item.parsed.y.toLocaleString() + " 歩" } } },
-        scales: {
-          x: { grid: { display: false }, ticks: { color: css.getPropertyValue("--muted").trim(), maxTicksLimit: 7 } },
-          y: { grid: { color: css.getPropertyValue("--grid").trim() }, ticks: { color: css.getPropertyValue("--muted").trim() } }
-        }
-      }
-    });
-  });
+  fetch("/api/body/series?metric=steps&days=14").then(r => r.json()).then(d => Eri.barChart("achart", d, "歩", "直近14日の歩数データがないよ(iPhone のショートカットが止まってるかも)"));
 }
 </script>
 {% endblock %}

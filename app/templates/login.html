@@ -1,11 +1,20 @@
 {% extends "base.html" %}
-{% block content %}
-<div class="card" style="max-width:360px;margin:60px auto;">
-  <h1>ログイン</h1>
-  <form method="post" action="/login">
-    <div class="formrow"><input type="password" name="token" placeholder="API トークン" style="flex:1" autofocus></div>
-    <div class="formrow"><button class="primary" style="width:100%">入る</button></div>
-  </form>
-  <p class="muted">トークンはサーバの <code>/projects/health-hub/.env</code> の API_TOKEN</p>
+{% set bare = true %}
+{% block title %}ログイン · Eri{% endblock %}
+{% block solo %}
+<div class="solo">
+  <div class="solo-bg" aria-hidden="true">ERI</div>
+  <div class="solo-card">
+    <div class="hud"><span class="idx">[ 00 ]</span><span>ACCESS</span><span class="rule"></span></div>
+    <h1><span class="br">[</span>ログイン<span class="br">]</span></h1>
+    <div class="tri"><i></i><i></i><i></i><i></i></div>
+    {% if err %}<div class="flash bad"><b>ERROR</b><span>{{ err }}</span></div>{% endif %}
+    <form method="post" action="/login">
+      <div class="formrow"><input type="password" name="token" placeholder="API トークン" aria-label="API トークン" autocomplete="current-password" autofocus required style="width:100%"></div>
+      <div class="formrow"><button class="primary wide">入る</button></div>
+    </form>
+    <p class="note">トークンはサーバの <code>/projects/health-hub/.env</code> の API_TOKEN</p>
+  </div>
+  <div class="solo-band"><div class="a">ERI: HOME ASSISTANT</div><div class="b">ACCESS</div></div>
 </div>
 {% endblock %}
