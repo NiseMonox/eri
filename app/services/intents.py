@@ -28,15 +28,22 @@ async def execute(intent: dict, *, via: str) -> dict:
 
     if kind == "reminder":
         try:
-            r = reminders.create(str(intent["title"]), str(intent.get("body", "")),
-                                 clock.jst_default_iso(intent["due_at"]))
-            return {"ok": True,
-                    "reply": f"🔔 リマインダー作ったよ:{r['title']} @ "
-                             f"{clock.fmt_local(r['due_at'], '%m-%d %H:%M')}",
-                    "photo": None}
+            title = str(intent["title"])
+            due = clock.jst_default_iso(intent["due_at"])
+            if due is None:
+                raise ValueError("due_at 为空")
         except (KeyError, TypeError, ValueError):
             return {"ok": False, "reply": "時間が読み取れなかったよ。「明日の朝9時にゴミ出し」みたいに言ってみて",
                     "photo": None}
+        # LLM 算错日期(如晚上说「8点」)时别建出立刻就响的提醒:退回让它改正或问清楚
+        if clock.parse_iso(due) <= clock.now_utc():
+            return {"ok": False, "reply": f"{clock.fmt_local(due)} はもう過ぎてるよ。いつにする?",
+                    "photo": None}
+        r = reminders.create(title, str(intent.get("body", "")), due)
+        return {"ok": True,
+                "reply": f"🔔 リマインダー作ったよ:{r['title']} @ "
+                         f"{clock.fmt_local(r['due_at'], '%m-%d %H:%M')}",
+                "photo": None}
 
     if kind == "today":
         return {"ok": True, "reply": today_text(), "photo": None}
@@ -44,7 +51,8 @@ async def execute(intent: dict, *, via: str) -> dict:
     if kind == "chart":
         from .. import charts
 
-        return {"ok": True, "reply": "直近30日の体重グラフだよ", "photo": charts.weight_chart_png(30)}
+        days = max(7, min(365, int(intent.get("days") or 30)))
+        return {"ok": True, "reply": f"直近{days}日の体重グラフだよ", "photo": charts.weight_chart_png(days)}
 
     if kind == "report":
         from ..scheduler.jobs import run_report

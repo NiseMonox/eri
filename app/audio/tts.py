@@ -167,11 +167,12 @@ def _speak_replies() -> bool:
 
 
 async def announce_snoozed(title: str, until_local) -> bool:
-    """对话确认:推迟。tts.speak_replies=false 时不出声(只走文字渠道)。"""
+    """对话确认:推迟/改期。tts.speak_replies=false 时不出声(只走文字渠道)。改到别的日子时带上日期。"""
     if not _speak_replies():
         return False
     t = await ensure_ja(title)
-    return await announce(f"はーい。{until_local.strftime('%H時%M分')}に、また{t}の声かけるね")
+    day = "" if until_local.date() == clock.now_local().date() else f"{until_local.month}月{until_local.day}日の"
+    return await announce(f"はーい。{day}{until_local.strftime('%H時%M分')}に、また{t}の声かけるね")
 
 
 async def announce_done(title: str) -> bool:

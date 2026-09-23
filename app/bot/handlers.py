@@ -8,7 +8,7 @@ from ..config import settings
 from ..services import intents, routines
 
 HELP = (
-    "そのままメッセージ送ってね:\n"
+    "なんでも気軽に話しかけてね。一度にいくつ頼んでもOKだよ。たとえば:\n"
     "「62.5」→ 体重記録\n"
     "「昨夜10時に測って62.3」→ 時刻つきで記録\n"
     "「薬飲んだ」→ 服薬確認\n"

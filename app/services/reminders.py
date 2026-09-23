@@ -182,6 +182,17 @@ def open_items() -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def upcoming(limit: int = 20) -> list[dict]:
+    """对话上下文用:明天及以后待触发的提醒(今天的在 open_items 里),
+    「明天那个改到 4 点」「取消下周的提醒」才有对象可指。"""
+    end = clock.now_local().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    rows = db.get_db().execute(
+        "SELECT * FROM reminders WHERE status='pending' AND due_at >= ? ORDER BY due_at LIMIT ?",
+        (clock.iso(end), limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def upsert_external(title: str, due_at_iso: str) -> dict:
     """来自 Apple 提醒事项的导入:同标题且时间在 ±2 分钟内的(任意状态)视为同一条,不重建。
     防回环靠列表隔离(服务器→Apple 写专用列表,反向只读用户自己的列表),这里的去重是保底。"""

@@ -8,6 +8,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import pytest
 
 from app import clock, db
+from app.config import settings
+
+
+@pytest.fixture(autouse=True)
+def _no_real_llm(monkeypatch):
+    """.env 里是真 DeepSeek key;测试一律清空——漏 mock 的 LLM 调用只会降级成 None,不会打到真 API。"""
+    monkeypatch.setattr(settings, "deepseek_api_key", "")
 
 
 @pytest.fixture()

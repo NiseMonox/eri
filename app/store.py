@@ -10,9 +10,8 @@ EDITABLE_KEYS = {
     "audio.backend": "mpv",
     "audio.alsa_device": "",          # 如 alsa/plughw:CARD=Device;空=系统默认
     "audio.cast_ip": "",
-    "llm.provider": "claude",         # claude|deepseek|off
-    "llm.claude_model_parse": "sonnet",    # 对话决策/解析/翻译:sonnet 够用且快(可填 opus/fable 或完整 model id)
-    "llm.claude_model_report": "sonnet",   # 周报文案:想要更好文笔可改 opus
+    "llm.provider": "deepseek",       # deepseek|off(off = 只走正则快路径,LLM 相关功能全部降级)
+    "llm.model": "deepseek-flash",    # DeepSeek 模型 id;GET https://api.deepseek.com/models 可查(如 deepseek-v4-pro)
     "report.enabled": True,
     "withings.poll_minutes": 15,
     "tts.enabled": True,

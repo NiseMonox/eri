@@ -232,7 +232,7 @@ async def maintain_after_turn(user_text: str, assistant_reply: str) -> dict | No
     now = clock.now_local().strftime("%Y-%m-%d %H:%M (%A)")
     prompt = (f"【当前时间(东京)】{now}\n【现有记忆】\n{_listing_for_llm()}\n\n"
               f"【本轮对话】\n用户: {user_text}\n艾莉: {assistant_reply}")
-    ops = _parse(await llm.complete(prompt, system=MAINTAIN_SYSTEM, timeout=40, purpose="maintain"))
+    ops = _parse(await llm.complete(prompt, system=MAINTAIN_SYSTEM, timeout=40))
     if ops is None:
         return None
     n = apply_ops(ops)
@@ -254,7 +254,7 @@ async def nightly_cleanup() -> dict:
     n = {"expired": expired, "update": 0, "remove": 0}
     if len(list_active()) >= 2:
         ops = _parse(await llm.complete(f"【现有记忆】\n{_listing_for_llm()}",
-                                        system=CLEANUP_SYSTEM, timeout=60, purpose="maintain"))
+                                        system=CLEANUP_SYSTEM, timeout=60))
         if ops:
             ops.pop("add", None)   # 清理阶段不新增
             r = apply_ops(ops, source="system")

@@ -1,12 +1,15 @@
-"""对话式秘书:迁移、snooze/追催状态机、conversation 动作执行(mock LLM)。"""
+"""对话式秘书:迁移、snooze/追催状态机、conversation 工具调用循环(mock LLM)。"""
 
+import copy
 import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from app import clock, db
-from app.services import conversation, reminders
+import pytest
+
+from app import clock, db, events
+from app.services import conversation, intents, reminders, weights
 
 T0 = datetime(2026, 8, 15, 1, 0, tzinfo=timezone.utc)   # JST 10:00
 
@@ -110,73 +113,142 @@ def test_snooze_resets_and_refires(fresh_db):
     assert len(due) == 1 and due[0]["id"] == inst["id"]
 
 
-async def test_conversation_snooze_and_done(fresh_db, monkeypatch):
+def _fake_llm(monkeypatch, *steps):
+    """按顺序回放的假 LLM。每步:[(工具名, 参数), ...] = 发起工具调用;str = 最终回复;
+    dict = 原样返回的 assistant message;None = 调用失败。返回每次收到的 messages 快照。"""
+    seen = []
+    it = iter(steps)
+
+    async def fake_chat(messages, tools=None, timeout=45):
+        seen.append(copy.deepcopy(messages))
+        step = next(it)
+        if step is None or isinstance(step, dict):
+            return step
+        if isinstance(step, str):
+            return {"role": "assistant", "content": step}
+        return {"role": "assistant", "content": "", "tool_calls": [
+            {"id": f"call_{i}", "type": "function",
+             "function": {"name": name, "arguments": json.dumps(args, ensure_ascii=False)}}
+            for i, (name, args) in enumerate(step)]}
+
+    async def no_complete(*a, **k):
+        return None
+
+    from app.llm import base as llm
+
+    monkeypatch.setattr(llm, "chat", fake_chat)
+    monkeypatch.setattr(llm, "complete", no_complete)   # 后台记忆维护别吃掉脚本步骤
+    return seen
+
+
+def _tool_results(messages):
+    return [json.loads(m["content"]) for m in messages if m["role"] == "tool"]
+
+
+@pytest.fixture()
+def no_tts(monkeypatch):
+    from app.audio import tts
+
+    async def quiet(*a, **k):
+        return False
+
+    monkeypatch.setattr(tts, "announce_snoozed", quiet)
+    monkeypatch.setattr(tts, "announce_done", quiet)
+
+
+async def test_conversation_snooze_and_done(fresh_db, monkeypatch, no_tts):
     clock.set_override(T0)
     inst = reminders.create_instance("去健身房", schedule_id=7)
     reminders.mark_notified(inst["id"])
 
-    async def no_tts(*a, **k):
-        return False
-
-    from app.audio import tts
-
-    monkeypatch.setattr(tts, "announce_snoozed", no_tts)
-    monkeypatch.setattr(tts, "announce_done", no_tts)
-
-    async def fake_llm_snooze(prompt, system="", timeout=45):
-        assert "去健身房" in prompt      # 上下文里能看到开放事项
-        return json.dumps({"action": "snooze", "reminder_id": inst["id"],
-                           "until": "2026-08-15 14:00"})
-
-    from app.llm import base as llm
-
-    monkeypatch.setattr(llm, "complete", fake_llm_snooze)
+    seen = _fake_llm(monkeypatch,
+                     [("snooze", {"reminder_id": inst["id"], "until": "2026-08-15 14:00"})],
+                     "OK、14時にまた声かけるね👍")
     res = await conversation.handle("手头有点事,下午再去", via="siri")
-    assert res["ok"] and "14:00" in res["reply"]
+    assert res["ok"] and res["reply"] == "OK、14時にまた声かけるね"     # LLM 写的回复;Siri 去掉 emoji
+    assert "去健身房" in seen[0][0]["content"]                             # 开放事项进了系统上下文
+    assert "14:00" in _tool_results(seen[1])[0]["result"]                 # 执行结果回喂给 LLM
     assert reminders.get(inst["id"])["status"] == "pending"
 
-    async def fake_llm_done(prompt, system="", timeout=45):
-        assert "手头有点事" in prompt    # chat_log 进入了上下文
-        return json.dumps({"action": "done", "reminder_id": inst["id"]})
-
-    monkeypatch.setattr(llm, "complete", fake_llm_done)
+    seen = _fake_llm(monkeypatch, [("mark_done", {"reminder_id": inst["id"]})], "えらい!")
     res2 = await conversation.handle("那我去健身咯", via="siri")
-    assert res2["ok"] and "完了" in res2["reply"]
-    assert reminders.get(inst["id"])["status"] == "done"
+    assert any(m["role"] == "user" and "手头有点事" in m["content"] for m in seen[0])  # 上一轮进了多轮历史
+    assert res2["ok"] and reminders.get(inst["id"])["status"] == "done"
     assert len(reminders.done_today()) == 1
 
 
-async def test_conversation_fast_path_no_llm(fresh_db, monkeypatch):
-    async def boom(*a, **k):
-        raise AssertionError("正则快路径不该碰 LLM")
+async def test_multiple_intents_in_one_message(fresh_db, monkeypatch):
+    clock.set_override(T0)
+    seen = _fake_llm(monkeypatch,
+                     [("record_weight", {"weight_kg": 62.3, "measured_at": None}),
+                      ("create_reminder", {"title": "取快递", "due_at": "2026-08-16 15:00"})],
+                     "62.3kg記録して、明日15時のリマインダーもセットしたよ")
+    res = await conversation.handle("今天早上称了62.3,明天下午三点提醒我去取快递", via="telegram")
+    assert res["ok"] and "62.3kg" in res["reply"]
+    assert [r["ok"] for r in _tool_results(seen[1])] == [True, True]
+    assert weights.stats(7)["last"] == 62.3
+    assert [r["title"] for r in reminders.upcoming()] == ["取快递"]
 
-    from app.llm import base as llm
 
-    monkeypatch.setattr(llm, "complete", boom)
+async def test_upcoming_reminder_can_be_rescheduled(fresh_db, monkeypatch, no_tts):
+    """明天以后的提醒也在上下文里,「改到 4 点」有对象可指;改到过去的时刻被拒,LLM 可以改正。"""
+    clock.set_override(T0)
+    r = reminders.create("取快递", "", "2026-08-16T06:00:00Z")          # 明天 15:00 JST
+    seen = _fake_llm(monkeypatch,
+                     [("snooze", {"reminder_id": r["id"], "until": "2026-08-15 09:00"})],   # 已过
+                     [("snooze", {"reminder_id": r["id"], "until": "2026-08-16 16:00"})],
+                     "明日16時に変えたよ")
+    await conversation.handle("明天取快递改到4点", via="telegram")
+    assert "【今后的提醒】" in seen[0][0]["content"] and "取快递" in seen[0][0]["content"]
+    first, second = _tool_results(seen[2])
+    assert first["ok"] is False and "過ぎてる" in first["result"]
+    assert second["ok"] and "08/16 16:00" in second["result"]
+    assert reminders.get(r["id"])["due_at"] == "2026-08-16T07:00:00Z"
+
+
+async def test_create_reminder_rejects_past_time(fresh_db, monkeypatch):
+    clock.set_override(T0)                                              # JST 10:00
+    seen = _fake_llm(monkeypatch,
+                     [("create_reminder", {"title": "倒垃圾", "due_at": "2026-08-15 08:00"})],
+                     "8時はもう過ぎてるよ。明日の朝にする?")
+    res = await conversation.handle("8点提醒我倒垃圾", via="telegram")
+    assert res["ok"] is False and _tool_results(seen[1])[0]["ok"] is False
+    assert reminders.upcoming() == [] and reminders.open_items() == []
+
+
+async def test_regex_fallback_when_llm_down(fresh_db, monkeypatch):
+    """LLM 关闭/不可用:正则认得出的照样记录(模板回复),认不出的老实说。"""
+    _fake_llm(monkeypatch, None, None)
     res = await conversation.handle("62.5", via="telegram")
     assert res["ok"] and "62.5" in res["reply"]
+    res2 = await conversation.handle("今天好累", via="telegram")
+    assert res2["ok"] is False and "頭がうまく回らない" in res2["reply"]
+
+
+async def test_llm_fails_after_tools_uses_tool_replies(fresh_db, monkeypatch):
+    """工具已执行、写回复时 LLM 挂了:不能再走正则重复记录,用工具的模板回复收尾。"""
+    clock.set_override(T0)
+    _fake_llm(monkeypatch, [("record_weight", {"weight_kg": 61.8, "measured_at": None})], None)
+    res = await conversation.handle("61.8", via="telegram")
+    assert res["ok"] and "61.8kg 記録したよ" in res["reply"]
+    assert weights.stats(7)["count"] == 1
 
 
 async def test_conversation_rejects_hallucinated_id(fresh_db, monkeypatch):
-    """LLM 幻觉出的 id(不在开放事项里)不能动历史行/未来行。"""
+    """LLM 幻觉出的 id(不在开放事项/今后的提醒里)不能动历史行。"""
     clock.set_override(T0)
     inst = reminders.create_instance("已完成的旧事", schedule_id=1)
     reminders.mark_notified(inst["id"])
-    reminders.set_status(inst["id"], "done")          # 历史行,不在 open_items
-
-    async def fake_llm(prompt, system="", timeout=45):
-        return json.dumps({"action": "snooze", "reminder_id": inst["id"],
-                           "until": "2026-08-15 14:00"})
-
-    from app.llm import base as llm
-
-    monkeypatch.setattr(llm, "complete", fake_llm)
+    reminders.set_status(inst["id"], "done")          # 历史行
+    seen = _fake_llm(monkeypatch,
+                     [("snooze", {"reminder_id": inst["id"], "until": "2026-08-15 14:00"})],
+                     "どの件のこと?")
     res = await conversation.handle("晚点再说", via="siri")
-    assert res["ok"] is False and "見つからなかった" in res["reply"]
+    assert res["ok"] is False and "見つからなかった" in _tool_results(seen[1])[0]["result"]
     assert reminders.get(inst["id"])["status"] == "done"   # 没被复活
 
 
-async def test_missed_can_be_completed_late(fresh_db, monkeypatch):
+async def test_missed_can_be_completed_late(fresh_db, monkeypatch, no_tts):
     """作罢(missed)的事项仍在开放事项里,「补做了」能兑现。"""
     clock.set_override(T0)
     inst = reminders.create_instance("倒垃圾", schedule_id=2,
@@ -187,29 +259,27 @@ async def test_missed_can_be_completed_late(fresh_db, monkeypatch):
     assert acts and acts[-1][1] == "missed"
     assert any(r["id"] == inst["id"] for r in reminders.open_items())
 
-    async def no_tts(*a, **k):
-        return False
-
-    from app.audio import tts
-
-    monkeypatch.setattr(tts, "announce_done", no_tts)
-
-    async def fake_llm(prompt, system="", timeout=45):
-        return json.dumps({"action": "done", "reminder_id": inst["id"]})
-
-    from app.llm import base as llm
-
-    monkeypatch.setattr(llm, "complete", fake_llm)
+    _fake_llm(monkeypatch, [("mark_done", {"reminder_id": inst["id"]})], "えらい!")
     res = await conversation.handle("垃圾我刚才倒了", via="telegram")
     assert res["ok"] and reminders.get(inst["id"])["status"] == "done"
 
 
-async def test_conversation_llm_garbage(fresh_db, monkeypatch):
-    async def bad_llm(*a, **k):
-        return "我觉得你应该去健身(这不是JSON)"
+async def test_bad_tool_calls_do_not_crash(fresh_db, monkeypatch):
+    """未知工具、参数不是 JSON、执行时抛异常:错误都回喂给 LLM,不炸。"""
+    async def boom(*a, **k):
+        raise RuntimeError("db locked")
 
-    from app.llm import base as llm
-
-    monkeypatch.setattr(llm, "complete", bad_llm)
+    monkeypatch.setattr(intents, "execute", boom)
+    seen = _fake_llm(monkeypatch,
+                     {"role": "assistant", "content": "", "tool_calls": [
+                         {"id": "a", "type": "function",
+                          "function": {"name": "launch_rocket", "arguments": "{}"}},
+                         {"id": "b", "type": "function",
+                          "function": {"name": "record_weight", "arguments": "{oops"}},
+                         {"id": "c", "type": "function",
+                          "function": {"name": "show_today", "arguments": ""}}]},
+                     "ごめん、うまくいかなかった")
     res = await conversation.handle("嗯呢那个啥", via="siri")
-    assert res["reply"]     # 不炸,拿到兜底回复
+    assert res["reply"] == "ごめん、うまくいかなかった" and res["ok"] is False
+    assert [r["ok"] for r in _tool_results(seen[1])] == [False, False, False]
+    assert events.recent(kind_prefix="tool_error")

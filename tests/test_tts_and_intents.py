@@ -78,7 +78,7 @@ async def test_intents_weight_and_med(fresh_db):
 
 
 async def test_routine_done_via_conversation(fresh_db, monkeypatch):
-    """「薬飲んだ」正则快路径 → 最近的 med 类 routine 实例 done。"""
+    """LLM 不可用时「薬飲んだ」走正则兜底 → 最近的 med 类 routine 实例 done。"""
     from app.services import conversation
     from app.audio import tts as _tts
 

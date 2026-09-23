@@ -113,20 +113,29 @@ async def test_nightly_cleanup_expires(fresh_db, monkeypatch):
 async def test_conversation_forget_and_memory_maintenance(fresh_db, monkeypatch):
     clock.set_override(T0)
     m = memories.add("preference", "朝は催促されたくない")
-    calls = []
+    systems = []
+    steps = iter([
+        {"role": "assistant", "content": "", "tool_calls": [{
+            "id": "c0", "type": "function",
+            "function": {"name": "forget_memory", "arguments": json.dumps({"memory_id": m["id"]})}}]},
+        {"role": "assistant", "content": "忘れたよ、もう言わないね"},
+    ])
 
-    async def fake_llm(prompt, system="", timeout=45, purpose="parse"):
-        calls.append(system[:20])
-        if "记忆管理器" in system:
-            return json.dumps({"add": [{"kind": "fact", "text": "健身房はサクラフィット"}], "update": [], "remove": []})
-        assert "朝は催促されたくない" in prompt          # 记忆注入进上下文
-        return json.dumps({"action": "forget", "memory_id": m["id"]})
+    async def fake_chat(messages, tools=None, timeout=45):
+        systems.append(messages[0]["content"])
+        return next(steps)
+
+    async def fake_complete(prompt, system="", timeout=45):
+        assert "记忆管理器" in system                 # 记忆维护仍走单轮 complete
+        return json.dumps({"add": [{"kind": "fact", "text": "健身房はサクラフィット"}], "update": [], "remove": []})
 
     from app.llm import base as llm
 
-    monkeypatch.setattr(llm, "complete", fake_llm)
+    monkeypatch.setattr(llm, "chat", fake_chat)
+    monkeypatch.setattr(llm, "complete", fake_complete)
     res = await conversation.handle("那个别记了", via="siri")
     assert res["ok"] and "忘れた" in res["reply"]
+    assert "朝は催促されたくない" in systems[0]          # 记忆注入进系统上下文
     assert memories.get(m["id"])["active"] == 0
     # 异步维护任务跑完
     import asyncio

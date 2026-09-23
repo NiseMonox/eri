@@ -1,6 +1,7 @@
 """对话层:自由文本的统一大脑。Telegram 与 Siri(/api/ingest/text)都走 handle()。
-快路径=正则(零延迟);其余带上下文(开放事项+3天对话+长期记忆)一次 LLM 调用出动作 JSON。
-每轮结束后异步跑记忆维护(不阻塞回复)。"""
+每句话都交给 LLM(function calling):像聊天一样回复,同时按意图自动调用工具——一句话里几件事就调几个。
+工具 = 下面 _execute 的既有动作(id 验明正身、时间校验都在那里),LLM 看到执行结果再用艾莉口吻回复。
+LLM 关闭/不可用时降级到正则快路径(模板回复),核心记录照常。每轮结束后异步跑记忆维护(不阻塞回复)。"""
 
 import asyncio
 import json
@@ -12,19 +13,63 @@ from ..bot import parser
 from ..llm import base as llm
 from . import intents, memories, reminders, routines
 
-SYSTEM = """你是家庭 AI 助手「艾莉」的决策器。根据【上下文】和用户消息,输出一个 JSON(只输出 JSON,别的什么都不要):
-- 推迟 {"action":"snooze","reminder_id":N,"until":"yyyy-MM-dd HH:mm"}   ← 「下午再去」「过会儿叫我」;until 按当前时间换算(东京时间);"下午"=14:00,"晚上"=20:00,"待会/过会"=+1小时
-- 完成 {"action":"done","reminder_id":N}   ← 「那我去健身咯」「做完了」「已经去过了」「薬飲んだ」;对应【开放事项】里的 routine 或提醒
-- 取消 {"action":"dismiss","reminder_id":N} ← 「今天不去了」「算了取消吧」
-- 忘掉记忆 {"action":"forget","memory_id":N} ← 「忘掉 XX」「那个不用记了」;对应【长期记忆】里的 id
-- 记体重 {"action":"weight","weight_kg":62.5,"measured_at":null 或 "yyyy-MM-dd HH:mm"}
-- 新建一次性提醒 {"action":"reminder","title":"...","due_at":"yyyy-MM-dd HH:mm"}
-- 今日待办 {"action":"today"} / 体重曲线 {"action":"chart"} / 周报 {"action":"report"}
-- 问身体数据(「体脂率多少」)→ 用【身体数据】里的数字回答 {"action":"chat","reply":"..."}
-- 问「你记得我什么」→ 用【长期记忆】内容回答 {"action":"chat","reply":"..."}
-- 闲聊或无法判断 {"action":"chat","reply":"简短自然的【日语】回应(用户是日语环境,回复一律日语,轻松的だよ/ね口吻)"}
-指代消解:done/snooze/dismiss 的 id 必须来自【开放事项】;forget 的 id 必须来自【长期记忆】;没有对应项却像在指代时,用 chat 问清楚。
-用户消息可能是中文或日语,都要理解;chat 的 reply 一律日语——不要把用户消息里的中文词原样混进日语回复(如「健身」→「運動/ジム」)。"""
+SYSTEM = """你是「艾莉」(エリ),用户家里的 AI 助手兼健康秘书:帮用户记体重、管提醒、到点催促,也陪着聊天。
+
+【说话方式】
+- 回复一律日语,像朋友一样轻松(だよ/ね口吻),一般 1-3 句,不说教
+- 用户说中文或日语都要理解,但别把中文词原样混进日语回复(如「健身」→「ジム/運動」)
+- 只依据【上下文】和工具返回的结果说话:不编数据,没执行成功的事不能说做了
+
+【工具】
+- 话里有能用工具办的事(记体重、建提醒、推迟/改期、完成、取消、忘掉记忆、看今日待办、体重曲线、周报)就直接调用,不用先征求同意;一句话里有几件事就调几个
+- 纯聊天、问身体数据(用【身体数据】的数字答)、问「你记得我什么」(用【长期记忆】答)时不调工具,直接回复
+- reminder_id 只能取自【开放事项】或【今后的提醒】,memory_id 只能取自【长期记忆】;对不上号时别猜,问清楚
+- 时间一律东京时间 yyyy-MM-dd HH:mm,按【当前时间】换算:「下午」=14:00、「晚上」=20:00、「待会/过会」=+1 小时;只说了钟点而今天这个钟点已过,就当明天
+- 只能建一次性提醒;要每天/每周重复的,请用户在「Webのスケジュールページ(/schedules)」设置
+- 工具返回 ok=false 时照实说明原因,需要的话问清楚
+- 历史消息里用户话前面的 [MM/DD HH:MM] 是发送时间;你的回复不要带这种时间戳"""
+
+SIRI_NOTE = "\n\n这条消息来自 Siri 语音,回复会被朗读:不要用 emoji、列表和符号,说得口语一点。"
+# 提示词管不住模型加 emoji,Siri 回复在代码里兜底删掉(快捷指令会把 😌 念成「ほっとした顔」)
+RE_EMOJI = re.compile("[\U0001F000-\U0001FAFF☀-➿️‍]")
+FALLBACK_REPLY = "ごめん、いま頭がうまく回らないみたい。「62.5」で体重記録、「薬飲んだ」で服薬確認はできるよ"
+MAX_ROUNDS = 4          # 一句话最多几轮「调工具 → 看结果」
+
+
+def _tool(name: str, desc: str, props: dict | None = None, required: list | None = None) -> dict:
+    return {"type": "function", "function": {
+        "name": name, "description": desc,
+        "parameters": {"type": "object", "properties": props or {}, "required": required or []}}}
+
+
+_WHEN = {"type": "string", "description": "东京时间 yyyy-MM-dd HH:mm,必须是将来"}
+_RID = {"type": "integer", "description": "【开放事项】或【今后的提醒】里的 id"}
+TOOLS = [
+    _tool("record_weight", "记录体重(用户报了体重数字时)",
+          {"weight_kg": {"type": "number", "description": "公斤"},
+           "measured_at": {"type": ["string", "null"],
+                           "description": "称重时刻 yyyy-MM-dd HH:mm;没说就 null(=现在)"}},
+          ["weight_kg"]),
+    _tool("create_reminder", "新建一次性提醒:到点推送 + 音箱播报,没回应会追催",
+          {"title": {"type": "string", "description": "简短标题"}, "due_at": _WHEN},
+          ["title", "due_at"]),
+    _tool("snooze", "把某项推迟/改期到指定时刻(「下午再去」「改到 4 点」)",
+          {"reminder_id": _RID, "until": _WHEN}, ["reminder_id", "until"]),
+    _tool("mark_done", "把某项标记为完成(「做完了」「薬飲んだ」「已经去过了」)",
+          {"reminder_id": _RID}, ["reminder_id"]),
+    _tool("dismiss", "取消某项,不再催(「今天不去了」「算了取消吧」)",
+          {"reminder_id": _RID}, ["reminder_id"]),
+    _tool("forget_memory", "忘掉一条长期记忆(「那个不用记了」)",
+          {"memory_id": {"type": "integer", "description": "【长期记忆】里的 id"}}, ["memory_id"]),
+    _tool("show_today", "取今天的待办/日程清单"),
+    _tool("weight_chart", "生成体重曲线图(图片会附在回复里)",
+          {"days": {"type": "integer", "description": "天数 7-365,默认 30"}}),
+    _tool("weekly_report", "生成体重周报并推送给用户"),
+]
+# 工具名 → _execute 的动作名
+TOOL_ACTIONS = {"record_weight": "weight", "create_reminder": "reminder", "snooze": "snooze",
+                "mark_done": "done", "dismiss": "dismiss", "forget_memory": "forget",
+                "show_today": "today", "weight_chart": "chart", "weekly_report": "report"}
 
 STANDARD_INTENTS = {"weight", "reminder", "today", "chart", "report"}
 
@@ -72,6 +117,12 @@ def _context() -> str:
             tag = "routine" if r.get("kind") == "routine" else "提醒"
             lines.append(f"- id={r['id']} [{tag}]「{r['title']}」 {clock.fmt_local(r['due_at'])} [{state}]")
 
+    upcoming = reminders.upcoming()
+    if upcoming:
+        lines.append("【今后的提醒】")
+        for r in upcoming:
+            lines.append(f"- id={r['id']}「{r['title']}」 {clock.fmt_local(r['due_at'])}")
+
     from . import body_metrics, weights
 
     st = weights.stats(7)
@@ -89,36 +140,89 @@ def _context() -> str:
     if mem:
         lines.append(mem)
 
-    chat = _recent_chat()
-    if chat:
-        lines.append("【最近对话】(3日以内)")
-        for c in chat:
-            who = "用户" if c["role"] == "user" else "艾莉"
-            when = clock.fmt_local(c["ts"], "%m/%d %H:%M")
-            lines.append(f"[{when}] {who}: {c['text']}")
     return "\n".join(lines)
+
+
+def _history() -> list[dict]:
+    """近 3 天对话(预算内)转成真正的多轮消息;用户话前缀发送时间,模型才分得清新旧。"""
+    msgs = [{"role": "user", "content": f"[{clock.fmt_local(c['ts'], '%m/%d %H:%M')}] {c['text']}"}
+            if c["role"] == "user" else {"role": "assistant", "content": c["text"]}
+            for c in _recent_chat()]
+    while msgs and msgs[0]["role"] == "assistant":     # 预算截断后别让历史以艾莉的话开头
+        msgs.pop(0)
+    return msgs
 
 
 async def handle(text: str, via: str) -> dict:
     """返回 {"ok", "reply", "photo"}。"""
     text = text.strip()
-    fast = parser.parse_regex(text)
-    if fast:
-        res = await _execute(fast, text, via)
-        _log(via, "user", text)
-        _log(via, "assistant", res["reply"])
-        return res
-
-    raw = await llm.complete(f"【上下文】\n{_context()}\n\n用户消息:{text}", system=SYSTEM)
-    action = _parse_json(raw)
-    res = await _execute(action, text, via)
+    res = await _agent(text, via)
+    used_llm = res is not None
+    if res is None:
+        # LLM 关闭/不可用:能被正则认出的(体重/服药/今日/图表/周报)照样执行,核心记录不断
+        fast = parser.parse_regex(text)
+        res = await _execute(fast, text, via) if fast else _r(False, FALLBACK_REPLY)
+    if via == "siri":
+        res["reply"] = RE_EMOJI.sub("", res["reply"]).strip()
     _log(via, "user", text)
     _log(via, "assistant", res["reply"])
-    if store.get("memory.enabled", True) and raw is not None:
-        # 持引用防 GC;决策 LLM 都失败时不再追加一次维护调用
+    if used_llm and store.get("memory.enabled", True):
+        # 持引用防 GC
         _bg.add(t := asyncio.create_task(_maintain_safe(text, res["reply"])))
         t.add_done_callback(_bg.discard)
     return res
+
+
+async def _agent(text: str, via: str) -> dict | None:
+    """工具调用循环。首轮 LLM 就失败 → None(交给正则兜底);
+    执行过工具后 LLM 才失败 → 用工具的模板回复收尾(不能再走正则,会重复执行)。"""
+    system = SYSTEM + "\n\n【上下文】\n" + _context() + (SIRI_NOTE if via == "siri" else "")
+    messages = [{"role": "system", "content": system}, *_history(), {"role": "user", "content": text}]
+    done: list[dict] = []
+    for _ in range(MAX_ROUNDS):
+        msg = await llm.chat(messages, tools=TOOLS, timeout=30)
+        if msg is None:
+            return _result(done) if done else None
+        calls = msg.get("tool_calls") or []
+        if not calls:
+            reply = (msg.get("content") or "").strip()
+            if reply:
+                return _result(done, reply)
+            return _result(done) if done else None
+        turn = {"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls}
+        if msg.get("reasoning_content"):
+            turn["reasoning_content"] = msg["reasoning_content"]   # DeepSeek 思考模式:同一轮内回传推理
+        messages.append(turn)
+        for call in calls:
+            res = await _run_tool(call, text, via)
+            done.append(res)
+            messages.append({"role": "tool", "tool_call_id": call.get("id"),
+                             "content": json.dumps({"ok": res["ok"], "result": res["reply"]},
+                                                   ensure_ascii=False)})
+    return _result(done)      # 轮数用尽
+
+
+async def _run_tool(call: dict, user_text: str, via: str) -> dict:
+    fn = call.get("function") or {}
+    kind = TOOL_ACTIONS.get(fn.get("name"))
+    try:
+        args = json.loads(fn.get("arguments") or "{}")
+    except (json.JSONDecodeError, TypeError):
+        args = None
+    if kind is None or not isinstance(args, dict):
+        return _r(False, f"ツールの呼び出しが不正だよ({fn.get('name')})")
+    try:
+        return await _execute({**args, "action": kind}, user_text, via)
+    except Exception as e:  # noqa: BLE001  一个工具出错不拖垮整轮对话,错误回喂给 LLM
+        events.log("tool_error", {"tool": fn.get("name"), "error": str(e)[:200]})
+        return _r(False, "ごめん、その処理でエラーが出ちゃった")
+
+
+def _result(done: list[dict], reply: str | None = None) -> dict:
+    """reply 缺省(LLM 中途失败/轮数用尽)时拼各工具的模板回复;photo 取第一张(体重曲线)。"""
+    return {"ok": all(d["ok"] for d in done),
+            "reply": reply or "\n".join(d["reply"] for d in done),
+            "photo": next((d["photo"] for d in done if d.get("photo") is not None), None)}
 
 
 _bg: set = set()
@@ -129,20 +233,6 @@ async def _maintain_safe(user_text: str, reply: str) -> None:
         await memories.maintain_after_turn(user_text, reply)
     except Exception as e:  # noqa: BLE001
         events.log("memory_error", {"error": str(e)[:200]})
-
-
-def _parse_json(raw: str | None) -> dict:
-    if not raw:
-        return {"action": "chat",
-                "reply": "ごめん、いま頭がうまく回らないみたい。「62.5」で体重記録、「薬飲んだ」で服薬確認はできるよ"}
-    try:
-        cleaned = re.sub(r"^```(json)?|```$", "", raw.strip(), flags=re.MULTILINE).strip()
-        d = json.loads(cleaned)
-        if isinstance(d, dict) and (d.get("action") or d.get("intent")):
-            return d
-    except (json.JSONDecodeError, TypeError):
-        pass
-    return {"action": "chat", "reply": (raw or "")[:200]}
 
 
 async def _execute(action: dict, user_text: str, via: str) -> dict:
@@ -160,29 +250,32 @@ async def _execute(action: dict, user_text: str, via: str) -> dict:
         await tts.announce_done(row["title"])
         return _r(True, f"✅ {row['title']}、完了だよ({clock.fmt_local(row['done_at'], '%H:%M')})")
 
-    # LLM 给的 id 一律先对【开放事项】/【长期记忆】验明正身
+    # LLM 给的 id 一律先对【开放事项】/【今后的提醒】/【长期记忆】验明正身
     if kind in ("snooze", "done", "dismiss"):
-        open_ids = {r["id"] for r in reminders.open_items()}
+        known = {r["id"] for r in reminders.open_items() + reminders.upcoming()}
         try:
             rid = int(action["reminder_id"])
         except (KeyError, TypeError, ValueError):
             return _r(False, "どの件のことか分からなかったよ。もう少し具体的に言ってくれる?")
-        if rid not in open_ids:
+        if rid not in known:
             return _r(False, "該当する予定が見つからなかったよ。どの件のこと?")
 
     if kind == "snooze":
         try:
             until = clock.parse_flexible_jst(str(action["until"]))
-        except (TypeError, ValueError):
+        except (KeyError, TypeError, ValueError):
             return _r(False, "いつに延ばすか聞き取れなかったよ。「午後2時にまた」みたいに言ってね")
+        if clock.parse_iso(until) <= clock.now_utc():
+            return _r(False, f"{clock.fmt_local(until)} はもう過ぎてるよ。いつにする?")
         row = reminders.snooze(rid, until)
         if row is None:
             return _r(False, "延ばす対象が見つからなかったよ")
         t_local = clock.to_local(clock.parse_iso(row["due_at"]))
+        when = t_local.strftime("%H:%M" if t_local.date() == clock.now_local().date() else "%m/%d %H:%M")
         from ..audio import tts
 
         await tts.announce_snoozed(row["title"], t_local)
-        return _r(True, f"OK、「{row['title']}」は {t_local.strftime('%H:%M')} にまた声かけるね")
+        return _r(True, f"OK、「{row['title']}」は {when} にまた声かけるね")
 
     if kind == "done":
         row = reminders.get(rid)
@@ -205,7 +298,7 @@ async def _execute(action: dict, user_text: str, via: str) -> dict:
             row = reminders.set_status(rid, "dismissed")
         if row is None or row["status"] != "dismissed":
             return _r(False, "その件が見つからなかったよ")
-        return _r(True, f"OK、「{row['title']}」は今日はナシね。もう催促しないよ")
+        return _r(True, f"OK、「{row['title']}」はナシにしたよ。もう催促しないよ")
 
     if kind == "forget":
         try:
@@ -224,8 +317,7 @@ async def _execute(action: dict, user_text: str, via: str) -> dict:
         payload["intent"] = kind
         return await intents.execute(payload, via=via)
 
-    reply = action.get("reply") or "ごめん、よくわからなかった。言い方を変えてみて?"
-    return _r(True, reply)
+    return _r(False, "ごめん、よくわからなかったよ")
 
 
 def _r(ok: bool, reply: str) -> dict:
