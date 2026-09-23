@@ -2,6 +2,7 @@ import json
 from datetime import datetime, timedelta
 
 from .. import clock, db, events
+from . import routines
 
 
 class InvalidWeight(ValueError):
@@ -38,6 +39,10 @@ def add_weight(
     ).fetchone()
     if created:
         events.log("weight_added", {"kg": kg, "source": source}, "weight", row["id"])
+        try:
+            routines.weight_recorded(at, source)   # 体重类 routine 的提醒:称了就自动完成
+        except Exception as e:  # noqa: BLE001  体重已经入库,联动失败只记日志
+            events.log("routine_error", {"weight_link": str(e)[:200]}, "weight", row["id"])
     return {"created": created, "row": dict(row)}
 
 

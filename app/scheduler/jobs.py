@@ -72,6 +72,11 @@ async def dispatch(type_: str, payload: dict, row: dict | None, force: bool = Fa
             events.log("routine_not_due", {"routine_id": routine["id"], "every_days": every},
                        "schedule", schedule_id)
             return   # 还没到日子;没做完的话明天同一时刻会再判断一次(自然顺延)
+        if routine["category"] == "weight" and not force and row is not None:
+            await _sync_scale()
+            if routines.done_on(routine["id"], routines.habit_day(clock.now_local())):
+                events.log("routine_already_done", {"routine_id": routine["id"]}, "schedule", schedule_id)
+                return   # 今天已经称过了
         inst = routines.create_instance(routine, schedule_id, payload.get("nag"),
                                         force=(row is None))
         if inst is None:
@@ -106,13 +111,31 @@ async def dispatch(type_: str, payload: dict, row: dict | None, force: bool = Fa
         raise ValueError(f"unknown schedule type: {type_}")
 
 
+async def _sync_scale() -> None:
+    from ..ingest import withings
+
+    await withings.poll_if_due(force=True)
+
+
+async def _weighed_meanwhile(inst: dict, routine: dict | None) -> bool:
+    """体重类:通知/追催前先同步一次秤——刚上过秤的,实例这时已被自动完成,就不用再催了。"""
+    if not routine or routine.get("category") != "weight":
+        return False
+    await _sync_scale()
+    return (reminders.get(inst["id"]) or {}).get("status") == "done"
+
+
 async def _send_routine_notice(inst: dict, routine: dict, nth: int = 0) -> None:
     cat = routines.CATEGORIES.get(routine.get("category", "other"), routines.CATEGORIES["other"])
-    label = "お薬の時間" if routine.get("category") == "med" else f"{cat['ja']}の時間"
-    title = f"{label}:{routine['name']}" + (f"({routine['detail']})" if routine.get("detail") else "")
+    if routine.get("category") == "weight":
+        # 上秤就自动完成;点开通知不等于称过,所以不挂确认链接
+        title, body, confirm_url = f"{routine['name']}の時間", "秤に乗れば自動で完了になるよ", None
+    else:
+        label = "お薬の時間" if routine.get("category") == "med" else f"{cat['ja']}の時間"
+        title = f"{label}:{routine['name']}" + (f"({routine['detail']})" if routine.get("detail") else "")
+        body, confirm_url = "通知タップで完了にできるよ", f"{settings.base_url}/c/r/{inst['token']}"
     if nth:
         title = f"[{nth}回目] " + title
-    confirm_url = f"{settings.base_url}/c/r/{inst['token']}"
     # inline 按钮只在 bot 运行时挂(bot 是 callback 的唯一消费端,不然按钮假死)
     from ..bot import runner as bot_runner
 
@@ -121,7 +144,7 @@ async def _send_routine_notice(inst: dict, routine: dict, nth: int = 0) -> None:
         done_label = "飲んだよ" if routine.get("category") == "med" else "やったよ"
         buttons = [(done_label, f"rdone:{inst['id']}"), ("今回はスキップ", f"rskip:{inst['id']}")]
     await notify(
-        cat["notify_profile"], title, "通知タップで完了にできるよ",
+        cat["notify_profile"], title, body,
         url=confirm_url,
         tg_buttons=buttons,
         ref_type="reminder", ref_id=inst["id"],
@@ -183,6 +206,8 @@ async def reminder_sweeper() -> None:
             reminders.mark_notified(r["id"])
             if r.get("kind") == "routine":
                 routine = routines.get(r["routine_id"]) or {"name": r["title"], "category": "other"}
+                if await _weighed_meanwhile(r, routine):
+                    continue
                 await _send_routine_notice(r, routine)
                 await tts.announce_routine(routine)
             else:
@@ -192,6 +217,8 @@ async def reminder_sweeper() -> None:
         for row, act in reminders.sweep_nag():
             is_routine = row.get("kind") == "routine"
             routine = routines.get(row["routine_id"]) if is_routine else None
+            if await _weighed_meanwhile(row, routine):
+                continue
             if act == "renag":
                 if routine:
                     await _send_routine_notice(row, routine, nth=row["remind_count"])

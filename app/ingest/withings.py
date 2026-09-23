@@ -176,13 +176,14 @@ async def poll() -> dict:
     return {"created": created, "metrics_created": metrics_created, "groups": len(grps)}
 
 
-async def poll_if_due() -> None:
-    """内部 job 每 5 分钟跑一次;按 settings 的间隔与上次时间决定是否真的拉。"""
+async def poll_if_due(force: bool = False) -> None:
+    """内部 job 每 5 分钟跑一次;按 settings 的间隔与上次时间决定是否真的拉。
+    force=True 不看间隔马上拉:体重提醒/追催发出前,先把刚上秤的那条同步进来。"""
     if not (configured() and connected()):
         return
     interval_min = int(store.get("withings.poll_minutes", 15) or 15)
     last_at = store.get("withings.last_poll_at", 0)
-    if time.time() - last_at < interval_min * 60:
+    if not force and time.time() - last_at < interval_min * 60:
         return
     store.set("withings.last_poll_at", int(time.time()))
     try:

@@ -18,6 +18,8 @@ CATEGORIES = {
     "exercise": {"ja": "運動", "notify_profile": "info"},
     "care": {"ja": "ケア", "notify_profile": "info"},
     "habit": {"ja": "習慣", "notify_profile": "info"},
+    # 量体重:记了体重就自动完成、当天称过就不提醒(见 weight_recorded)
+    "weight": {"ja": "体重", "notify_profile": "info"},
     "other": {"ja": "その他", "notify_profile": "info"},
 }
 
@@ -351,16 +353,60 @@ def record_done(routine_id: int, via: str = "web", done_at: str | None = None) -
     ).fetchone()
     if row:
         return complete(row["id"], via=via, done_at=done_at)
-    at = done_at or clock.now_iso()
+    return _add_done(routine, via, done_at or clock.now_iso())
+
+
+def _add_done(routine: dict, via: str, at: str) -> dict:
+    """没有提醒实例时补一条完成记录:以完成为准的间隔、热力图、周报都按它算。"""
+    conn = db.get_db()
     cur = conn.execute(
         "INSERT INTO reminders (title, body, due_at, status, done_at, done_via, kind, routine_id, token, "
         "created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-        (routine["name"], routine.get("detail") or "", at, "done", at, via, "routine", routine_id,
+        (routine["name"], routine.get("detail") or "", at, "done", at, via, "routine", routine["id"],
          secrets.token_urlsafe(16), clock.now_iso()),
     )
     conn.commit()
     events.log("routine_done", {"via": via, "adhoc": True}, "reminder", cur.lastrowid)
     return reminders.get(cur.lastrowid)
+
+
+# --- 体重类 routine:上秤后 Withings 同步过来就算完成,不用再点「やったよ」---
+
+def _day_range(day: date) -> tuple[str, str]:
+    return clock.iso(habit_day_start(day)), clock.iso(habit_day_start(day + timedelta(days=1)))
+
+
+def done_on(routine_id: int, day: date) -> bool:
+    """这个习惯日里完成过没有(按完成时刻算)。"""
+    lo, hi = _day_range(day)
+    return db.get_db().execute(
+        "SELECT 1 FROM reminders WHERE kind='routine' AND routine_id=? AND status='done' "
+        "AND done_at >= ? AND done_at < ? LIMIT 1",
+        (routine_id, lo, hi),
+    ).fetchone() is not None
+
+
+def weight_recorded(measured_at: str, via: str) -> list[dict]:
+    """新记了一条体重(Withings 同步 / Siri / Telegram / 网页):体重类 routine 在称重那个习惯日的提醒
+    自动完成(已作罢的也算补做);今天还没到点就先称了的,补一条完成记录,到点时 dispatch 看到就不提醒。
+    补同步进来的旧体重只完成它那天的提醒,不补记录。返回被记成完成的实例。"""
+    day = habit_day(clock.to_local(clock.parse_iso(measured_at)))
+    lo, hi = _day_range(day)
+    out = []
+    for rt in list_all():
+        if rt["category"] != "weight":
+            continue
+        row = db.get_db().execute(
+            "SELECT id FROM reminders WHERE kind='routine' AND routine_id=? "
+            "AND status IN ('pending','notified','missed') AND due_at >= ? AND due_at < ? "
+            "ORDER BY due_at LIMIT 1",
+            (rt["id"], lo, hi),
+        ).fetchone()
+        if row:
+            out.append(complete(row["id"], via=via, done_at=measured_at))
+        elif day == habit_day(clock.now_local()) and not done_on(rt["id"], day):
+            out.append(_add_done(rt, via, measured_at))
+    return out
 
 
 def _cron_times(cron: str) -> tuple[list[str], list[int] | None] | None:
@@ -400,16 +446,20 @@ def describe(routine_id: int) -> str:
 
 
 def next_fire(routine_id: int) -> datetime | None:
-    """下次真正会提醒的时刻(东京时间;以完成为准的间隔已计入,假设在那之前不再完成)。没设提醒时 None。"""
+    """下次真正会提醒的时刻(东京时间;以完成为准的间隔已计入,假设在那之前不再完成;
+    体重类今天已经称过就从明天算)。没设提醒时 None。"""
     now = clock.now_local()
     last = last_done_at(routine_id)
     last_day = habit_day(clock.to_local(clock.parse_iso(last))) if last else None
+    weighed_day = last_day if (get(routine_id) or {}).get("category") == "weight" else None
     best = None
     for s in schedules_of(routine_id):
         every = int(s["payload"].get("every_days") or 1)
         it = croniter(s["cron"], now)
         for _ in range(500):
             t = it.get_next(datetime)
+            if weighed_day is not None and habit_day(t) == weighed_day:
+                continue
             if every <= 1 or last_day is None or (habit_day(t) - last_day).days >= every:
                 if best is None or t < best:
                     best = t

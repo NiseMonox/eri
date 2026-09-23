@@ -37,6 +37,7 @@ SYSTEM = """你是「艾莉」(エリ),用户家里的 AI 助手兼健康秘书:
 - 时间一律东京时间 yyyy-MM-dd HH:mm,按当前时间换算:「下午」=14:00、「晚上」=20:00、「待会/过会」=+1 小时;只说了钟点而今天这个钟点已过,就当明天
 - 一次性的事用 create_reminder;重复的事(每天吃药、隔一天做拉伸、每周一倒垃圾)用 set_recurring——【ルーティン】里已有的传它的 routine_id 修改,别重复新建;没说几点提醒就先问
 - 用户说做完了:【开放事项】里有对应项用 mark_done,没有(比如提醒之前就做了)用 record_routine_done;说的是过去的事(「昨晚其实做了」)就把实际时刻填进 done_at
+- 报了体重数字就只调 record_weight:量体重的 routine 会自动完成,不用再对它 mark_done / record_routine_done
 - 用户明确说「记住…」才用 remember(日常对话不用,每天夜里会自动整理进记忆);问到过去的事而上面找不到时才用 search_memory(query 用日语;问某一天就给日期)
 - 工具返回 ok=false 时照实说明原因,需要的话问清楚"""
 
@@ -87,7 +88,8 @@ TOOLS = [
            "times": {"type": "array", "items": {"type": "string"}, "description": "提醒时刻 HH:MM,可多个"},
            "every_days": {"type": "integer", "description": "每 N 天,默认 1"},
            "weekdays": {"type": "array", "items": {"type": "integer"}, "description": "1=周一 … 7=周日"},
-           "category": {"type": "string", "enum": list(routines.CATEGORIES), "description": "新建时的分类"},
+           "category": {"type": "string", "enum": list(routines.CATEGORIES),
+                        "description": "新建时的分类;量体重用 weight(记了体重自动完成,当天称过就不提醒)"},
            "detail": {"type": "string", "description": "补充说明,如「20分」「10mg」"}},
           ["times"]),
     _tool("stop_recurring", "停掉某个 routine 的重复提醒(「不用再提醒我吃维生素了」)",
