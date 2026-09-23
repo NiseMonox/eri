@@ -1,0 +1,3 @@
+#!/bin/sh
+# 个人信息检查:新增内容(见 private_check.py)
+exec python3 "$(git rev-parse --show-toplevel)/.githooks/private_check.py"

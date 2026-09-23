@@ -1,4 +1,4 @@
-"""每日把健康数据快照推送到 NAS(NAS 共享里的 Health 目录)。
+"""每日把健康数据快照推送到 NAS 共享里的 Health 目录。
 非特权 LXC 挂不了 CIFS,走 smbclient 用户态推送(apt install smbclient),无需挂载。
 凭据在 .env(NAS_SMB_*),host 留空=功能整体关闭。fail-soft:NAS 不在线只记事件,
 第二天推的永远是最新全量,不需要补传。"""

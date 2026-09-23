@@ -11,6 +11,10 @@ media:
 
 deploy:
 	cp deploy/health-hub.service /etc/systemd/system/health-hub.service
+	# 本机专用的 drop-in(deploy/local/ 不进仓库,没有就跳过)
+	if [ -d deploy/local/health-hub.service.d ]; then \
+	  mkdir -p /etc/systemd/system/health-hub.service.d && \
+	  cp deploy/local/health-hub.service.d/*.conf /etc/systemd/system/health-hub.service.d/; fi
 	systemctl daemon-reload
 	systemctl enable --now health-hub
 

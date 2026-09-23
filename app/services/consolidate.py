@@ -22,7 +22,7 @@ from . import memories, routines
 MAX_DAYS_PER_RUN = 7
 MAX_ENTRIES = 15
 MAX_CORE_NOMINATIONS = 2
-NEIGHBOR_SIM = 0.55      # 候选与旧条目配对进对账的门槛(bge-m3 实测:「ゴールドジムに通っている」↔「サクラフィットに通っている」0.61)
+NEIGHBOR_SIM = 0.55      # 候选与旧条目配对进对账的门槛(bge-m3 实测:只有健身房名字不同的两句「〇〇に通っている」约 0.61)
 RELATED_SIM = 0.45       # 抽取前按当天的话找「相关的已有记忆」给 LLM 看的门槛
 NEIGHBORS = 5
 MAX_REWRITES = 5          # 单日 UPDATE+SUPERSEDE 超过这个数 = 视为坏输出,当天全部降级为 ADD

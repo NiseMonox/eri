@@ -9,3 +9,8 @@ __pycache__/
 deploy/bark/bark-data/
 media/*.wav
 deploy/ollama/ollama-data/
+
+# 个人环境信息:只留在本机,不进仓库(公开仓库)
+deploy/notes.md
+deploy/local/
+.private-terms
